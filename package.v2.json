@@ -23,5 +23,17 @@
         "history": {
             "v2.0": "适配 MoviePilot V2"
         }
+    },
+    "MCPServer": {
+        "name": "MCP Server",
+        "description": "启动MCP服务器实现大模型操作MoviePilot",
+        "labels": "MCP",
+        "version": "1.0",
+        "icon": "https://avatars.githubusercontent.com/u/182288589?s=200&v=4",
+        "author": "DzAvril",
+        "level": 1,
+        "history": {
+            "v1.0": "新增"
+        }
     }
 }
