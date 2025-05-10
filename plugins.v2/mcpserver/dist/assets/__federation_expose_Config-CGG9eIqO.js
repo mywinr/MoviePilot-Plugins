@@ -165,7 +165,7 @@ return (_ctx, _cache) => {
           default: _withCtx(() => [
             _createVNode(_component_v_card_title, null, {
               default: _withCtx(() => _cache[10] || (_cache[10] = [
-                _createTextVNode("插件配置")
+                _createTextVNode("MCP Server")
               ])),
               _: 1
             })
