@@ -11,6 +11,7 @@
       </v-card-item>
       <v-card-text class="overflow-y-auto">
         <v-alert v-if="error" type="error" class="mb-4">{{ error }}</v-alert>
+        <v-alert v-if="successMessage" type="success" class="mb-4">{{ successMessage }}</v-alert>
 
         <v-form ref="form" v-model="isFormValid" @submit.prevent="saveConfig">
           <!-- 基本设置区域 -->
@@ -26,87 +27,48 @@
                 persistent-hint
               ></v-switch>
             </v-col>
-            <v-col cols="12">
-              <v-text-field
-                v-model="config.name"
-                label="插件名称"
-                variant="outlined"
-                :rules="[v => !!v || '名称不能为空']"
-                hint="显示在插件列表中的名称"
-              ></v-text-field>
-            </v-col>
-            <v-col cols="12">
-              <v-textarea
-                v-model="config.description"
-                label="插件描述"
-                variant="outlined"
-                rows="3"
-                hint="简要说明插件的功能和用途"
-              ></v-textarea>
-            </v-col>
           </v-row>
-          <!-- 功能配置区域 -->
-          <div class="text-subtitle-1 font-weight-bold mt-4 mb-2">功能配置</div>
-          <v-row>
-            <v-col cols="12">
-              <v-select
-                v-model="config.update_interval"
-                label="更新频率"
-                :items="updateIntervalOptions"
-                variant="outlined"
-                item-title="text"
-                item-value="value"
-              ></v-select>
-            </v-col>
-          </v-row>
-          <!-- API配置区域 -->
-          <div class="text-subtitle-1 font-weight-bold mt-4 mb-2">API设置</div>
+          <!-- Server配置区域 -->
+          <div class="text-subtitle-1 font-weight-bold mt-4 mb-2">MCP Server配置</div>
           <v-row>
             <v-col cols="12" md="6">
               <v-text-field
-                v-model="config.api_url"
-                label="API地址"
+                v-model="config.port"
+                label="端口号"
                 variant="outlined"
-                hint="外部服务API地址"
-                :rules="[v => !v || v.startsWith('http') || '请输入有效的URL']"
+                hint="MCP服务端口号"
               ></v-text-field>
             </v-col>
             <v-col cols="12" md="6">
               <v-text-field
-                v-model="config.api_key"
+                v-model="config.auth_token"
                 label="API密钥"
                 variant="outlined"
                 :append-inner-icon="showApiKey ? 'mdi-eye-off' : 'mdi-eye'"
                 :type="showApiKey ? 'text' : 'password'"
                 @click:append-inner="showApiKey = !showApiKey"
-              ></v-text-field>
+                readonly
+              >
+                <template v-slot:append>
+                  <v-tooltip text="重置API密钥">
+                    <template v-slot:activator="{ props }">
+                      <v-btn
+                        v-bind="props"
+                        icon
+                        variant="text"
+                        color="warning"
+                        size="small"
+                        :loading="resettingApiKey"
+                        @click="resetApiKey"
+                      >
+                        <v-icon>mdi-key-alert</v-icon>
+                      </v-btn>
+                    </template>
+                  </v-tooltip>
+                </template>
+              </v-text-field>
             </v-col>
           </v-row>
-          <!-- 高级选项区域 -->
-          <v-expansion-panels variant="accordion">
-            <v-expansion-panel>
-              <v-expansion-panel-title>高级选项</v-expansion-panel-title>
-              <v-expansion-panel-text>
-                <v-slider
-                  v-model="config.concurrent_tasks"
-                  label="并发任务数"
-                  min="1"
-                  max="10"
-                  step="1"
-                  thumb-label
-                ></v-slider>
-
-                <v-combobox
-                  v-model="config.tags"
-                  label="标签"
-                  variant="outlined"
-                  chips
-                  multiple
-                  closable-chips
-                ></v-combobox>
-              </v-expansion-panel-text>
-            </v-expansion-panel>
-          </v-expansion-panels>
         </v-form>
       </v-card-text>
       <v-card-actions>
@@ -137,31 +99,16 @@ const props = defineProps({
 const form = ref(null)
 const isFormValid = ref(true)
 const error = ref(null)
+const successMessage = ref(null)
 const saving = ref(false)
 const showApiKey = ref(false)
-
-// 更新频率选项
-const updateIntervalOptions = [
-  { text: '5分钟', value: 5 },
-  { text: '15分钟', value: 15 },
-  { text: '30分钟', value: 30 },
-  { text: '1小时', value: 60 },
-  { text: '2小时', value: 120 },
-  { text: '6小时', value: 360 },
-  { text: '12小时', value: 720 },
-  { text: '1天', value: 1440 },
-]
+const resettingApiKey = ref(false)
 
 // 配置数据，使用默认值和初始配置合并
 const defaultConfig = {
-  name: '我的插件',
-  description: '',
   enable: true,
-  update_interval: 60,
-  api_url: '',
-  api_key: '',
-  concurrent_tasks: 3,
-  tags: [],
+  port: '3111',
+  auth_token: '',
 }
 
 // 合并默认配置和初始配置
@@ -171,11 +118,27 @@ const config = reactive({ ...defaultConfig })
 onMounted(() => {
   // 加载初始配置
   if (props.initialConfig) {
-    Object.keys(props.initialConfig).forEach(key => {
-      if (key in config) {
-        config[key] = props.initialConfig[key]
+    console.log('初始配置:', props.initialConfig)
+
+    // 处理顶层的 enable 属性
+    if ('enable' in props.initialConfig) {
+      config.enable = props.initialConfig.enable
+    }
+
+    // 处理嵌套在 config 对象中的属性
+    if (props.initialConfig.config) {
+      // 处理端口
+      if ('port' in props.initialConfig.config) {
+        config.port = props.initialConfig.config.port
       }
-    })
+
+      // 处理 auth_token
+      if ('auth_token' in props.initialConfig.config) {
+        config.auth_token = props.initialConfig.config.auth_token
+      }
+    }
+
+    console.log('处理后的配置:', config)
   }
 })
 
@@ -196,8 +159,18 @@ async function saveConfig() {
     // 模拟API调用等待
     await new Promise(resolve => setTimeout(resolve, 1000))
 
+    // 构建符合后端期望的数据结构
+    const configToSave = {
+      enable: config.enable,
+      config: {
+        port: config.port,
+        auth_token: config.auth_token
+      }
+    }
+    console.log('保存配置:', configToSave)
+
     // 发送保存事件
-    emit('save', { ...config })
+    emit('save', configToSave)
   } catch (err) {
     console.error('保存配置失败:', err)
     error.value = err.message || '保存配置失败'
@@ -214,6 +187,58 @@ function resetForm() {
 
   if (form.value) {
     form.value.resetValidation()
+  }
+}
+
+// 获取插件ID
+function getPluginId() {
+  return "MCPServer";
+}
+
+// 重置API密钥
+async function resetApiKey() {
+  if (!props.api || !props.api.post) {
+    error.value = 'API接口不可用，无法重置API密钥'
+    return
+  }
+
+  resettingApiKey.value = true
+  error.value = null
+  successMessage.value = null
+
+  try {
+    // 获取插件ID
+    const pluginId = getPluginId();
+
+    // 调用后端API生成新的Token，注意路径格式：plugin/{pluginId}/token
+    console.log('调用API生成新Token:', `plugin/${pluginId}/token`)
+    const response = await props.api.post(`plugin/${pluginId}/token`)
+
+    if (response && response.status === 'success') {
+      // 更新当前配置中的API密钥
+      // 注意：后端使用auth_token字段，前端也使用auth_token字段
+      config.auth_token = response.token || ''
+      successMessage.value = response.message || '已成功生成新的API密钥'
+
+      // 如果服务器正在运行，提示需要重启
+      if (response.message && response.message.includes('需要重启')) {
+        successMessage.value = '已生成新的API密钥，需要重启服务器才能生效'
+      }
+
+      console.log('API密钥已更新:', config.auth_token)
+    } else {
+      throw new Error(response?.message || '生成API密钥失败')
+    }
+  } catch (err) {
+    console.error('重置API密钥失败:', err)
+    error.value = err.message || '重置API密钥失败，请检查网络或查看日志'
+  } finally {
+    resettingApiKey.value = false
+    // 5秒后自动清除消息
+    setTimeout(() => {
+      successMessage.value = null
+      error.value = null
+    }, 5000)
   }
 }
 

@@ -31,7 +31,7 @@ class MCPServer(_PluginBase):
     # 插件图标
     plugin_icon = "https://avatars.githubusercontent.com/u/182288589?s=200&v=4"
     # 插件版本
-    plugin_version = "1.3"
+    plugin_version = "1.4"
     # 插件作者
     plugin_author = "DzAvril"
     # 作者主页
@@ -852,7 +852,7 @@ class MCPServer(_PluginBase):
                 "summary": "重启服务器"
             },
             {
-                "path": "/generate_token",
+                "path": "/token",
                 "endpoint": self._generate_new_token,
                 "methods": ["POST"],
                 "auth": "bear",
