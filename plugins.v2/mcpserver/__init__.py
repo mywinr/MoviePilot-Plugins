@@ -6,15 +6,21 @@ import venv
 import traceback
 import threading
 import socket
-import os
+import secrets
+import string
 from typing import List, Tuple, Dict, Any, Optional
 from pathlib import Path
 
 from app.log import logger
 from app.plugins import _PluginBase
 
+# 生成随机token函数
 
-# --- Plugin Class ---
+
+def generate_token(length=32):
+    """生成指定长度的随机安全token"""
+    alphabet = string.ascii_letters + string.digits
+    return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 
 class MCPServer(_PluginBase):
@@ -25,7 +31,7 @@ class MCPServer(_PluginBase):
     # 插件图标
     plugin_icon = "https://avatars.githubusercontent.com/u/182288589?s=200&v=4"
     # 插件版本
-    plugin_version = "1.2"
+    plugin_version = "1.3"
     # 插件作者
     plugin_author = "DzAvril"
     # 作者主页
@@ -44,15 +50,16 @@ class MCPServer(_PluginBase):
     _monitor_thread = None
     _monitor_stop_event = None
     _config = {
-        "host": "0.0.0.0",  # 使用127.0.0.1用于同一容器内通信
+        "host": "0.0.0.0",  # 监听所有网络接口
         "port": 3111,
         "log_level": "INFO",
         "health_check_interval": 3,  # 健康检查间隔(秒)
         "max_startup_time": 60,      # 最大启动等待时间(秒)
         "venv_dir": "venv",          # 虚拟环境目录名
-        "dependencies": ["mcp[cli]"],  # 需要安装的依赖
+        "dependencies": ["mcp[cli]", "psutil"],  # 需要安装的依赖
         "auto_restart": True,        # 是否自动重启意外终止的服务器
-        "restart_delay": 5           # 重启前等待时间(秒)
+        "restart_delay": 5,          # 重启前等待时间(秒)
+        "auth_token": "",            # API认证令牌
     }
 
     # 虚拟环境相关路径
@@ -62,37 +69,41 @@ class MCPServer(_PluginBase):
     _server_script_path = None
 
     def init_plugin(self, config: dict = None):
-        if config:
-            self._enable = config.get('enable', False)
-            self._config.update(config.get('config', {}))
+        """初始化插件"""
+        if not config:
+            return
 
-            # 设置当前模块所在目录
-            self._plugin_dir = Path(__file__).parent.absolute()
+        self._enable = config.get('enable', False)
+        self._config.update(config.get('config', {}))
 
-            # 设置虚拟环境路径
-            self._venv_path = self._plugin_dir / self._config["venv_dir"]
+        # 设置当前模块所在目录
+        self._plugin_dir = Path(__file__).parent.absolute()
 
-            # 设置Python解释器路径 (仅Linux)
-            self._python_bin = self._venv_path / "bin" / "python"
+        # 设置虚拟环境路径
+        self._venv_path = self._plugin_dir / self._config["venv_dir"]
 
-            # 设置服务器脚本路径
-            self._server_script_path = self._plugin_dir / "server.py"
+        # 设置Python解释器路径 (仅Linux)
+        self._python_bin = self._venv_path / "bin" / "python"
 
-            # 设置健康检查URL
-            host = self._config["host"]
-            port = self._config["port"]
-            self._health_check_url = f"http://{host}:{port}/mcp"
+        # 设置服务器脚本路径
+        self._server_script_path = self._plugin_dir / "server.py"
 
-            if self._enable:
-                # 确保虚拟环境存在
-                if not self._ensure_venv():
-                    logger.error("无法创建或验证虚拟环境，插件无法启动")
-                    self._enable = False
-                    return
+        # 设置健康检查URL
+        host = self._config["host"]
+        port = self._config["port"]
+        self._health_check_url = f"http://{host}:{port}/mcp"
 
-                self._start_server()
-            else:
-                self._stop_server()
+        if not self._enable:
+            self._stop_server()
+            return
+
+        # 确保虚拟环境存在
+        if not self._ensure_venv():
+            logger.error("无法创建或验证虚拟环境，插件无法启动")
+            self._enable = False
+            return
+
+        self._start_server()
 
     def _ensure_venv(self) -> bool:
         """确保虚拟环境存在并安装了所需依赖"""
@@ -105,45 +116,11 @@ class MCPServer(_PluginBase):
                 venv.create(self._venv_path, with_pip=True)
 
                 if not self._python_bin.exists():
-                    logger.error(
-                        f"创建虚拟环境失败，找不到Python解释器: {self._python_bin}"
-                    )
+                    logger.error(f"创建虚拟环境失败，找不到Python解释器: {self._python_bin}")
                     return False
 
                 # 安装依赖
-                deps = self._config["dependencies"]
-                deps_str = " ".join([f"'{dep}'" for dep in deps])
-                logger.info(f"正在安装依赖: {deps_str}")
-
-                # 构建安装命令
-                install_cmd = [
-                    str(self._python_bin),
-                    "-m",
-                    "pip",
-                    "install",
-                    "--upgrade",
-                    "-i https://mirrors.aliyun.com/pypi/simple/"
-                ]
-
-                # 添加依赖
-                for dep in self._config["dependencies"]:
-                    install_cmd.append(dep)
-
-                logger.info(f"执行安装命令: {' '.join(install_cmd)}")
-
-                # 执行安装
-                result = subprocess.run(
-                    install_cmd,
-                    cwd=str(self._plugin_dir),
-                    capture_output=True,
-                    text=True
-                )
-
-                if result.returncode != 0:
-                    logger.error(f"安装依赖失败: {result.stderr}")
-                    return False
-
-                logger.info("虚拟环境创建并安装依赖成功")
+                self._install_dependencies()
             else:
                 logger.info(f"虚拟环境已存在: {self._venv_path}")
 
@@ -154,102 +131,171 @@ class MCPServer(_PluginBase):
             logger.error(traceback.format_exc())
             return False
 
+    def _install_dependencies(self) -> bool:
+        """安装依赖包"""
+        try:
+            deps = self._config["dependencies"]
+            deps_str = " ".join(f"'{dep}'" for dep in deps)
+            logger.info(f"正在安装依赖: {deps_str}")
+
+            # 构建安装命令
+            install_cmd = [
+                str(self._python_bin),
+                "-m",
+                "pip",
+                "install",
+                "--upgrade",
+                "-i", "https://mirrors.aliyun.com/pypi/simple/"
+            ]
+
+            # 添加依赖
+            for dep in self._config["dependencies"]:
+                install_cmd.append(dep)
+
+            logger.info(f"执行安装命令: {' '.join(install_cmd)}")
+
+            # 执行安装
+            result = subprocess.run(
+                install_cmd,
+                cwd=str(self._plugin_dir),
+                capture_output=True,
+                text=True
+            )
+
+            if result.returncode != 0:
+                logger.error(f"安装依赖失败: {result.stderr}")
+                return False
+
+            logger.info("依赖安装成功")
+            return True
+
+        except Exception as e:
+            logger.error(f"安装依赖失败: {str(e)}")
+            logger.error(traceback.format_exc())
+            return False
+
     def _start_server(self):
         """启动MCP服务器作为独立进程"""
-        if self._server_process is None or \
-                self._server_process.poll() is not None:
+        if (self._server_process is not None and
+                self._server_process.poll() is None):
+            logger.info("服务器已在运行中")
+            return
+
+        try:
+            logger.info("正在启动MCP服务器作为独立进程...")
+
+            # 先检查端口是否被占用
+            self._check_and_clear_port()
+
+            # 获取启动器脚本路径
+            launcher_script = self._server_script_path
+            if not launcher_script.exists():
+                raise FileNotFoundError(f"启动器脚本不存在: {launcher_script}")
+
+            # 确保脚本有执行权限
             try:
-                logger.info("正在启动MCP服务器作为独立进程...")
-
-                # 先检查端口是否被占用
-                self._check_and_clear_port()
-
-                # 获取启动器脚本路径
-                launcher_script = self._plugin_dir / "server.py"
-                if not launcher_script.exists():
-                    raise FileNotFoundError(
-                        f"启动器脚本不存在: {launcher_script}"
-                    )
-
-                # 确保脚本有执行权限
-                try:
-                    launcher_script.chmod(0o755)
-                except Exception as e:
-                    logger.warning(f"无法设置脚本执行权限: {e}")
-
-                # 构建启动命令
-                cmd = [
-                    str(self._python_bin),
-                    str(launcher_script),
-                    "--host", self._config["host"],
-                    "--port", str(self._config["port"]),
-                    "--log-level", self._config["log_level"]
-                ]
-
-                logger.info(f"启动命令: {' '.join(cmd)}")
-
-                # 停止现有的日志线程(如果有)
-                self._stop_log_thread()
-
-                # 停止现有的监控线程(如果有)
-                self._stop_monitor_thread()
-
-                # 创建新的停止事件
-                self._log_stop_event = threading.Event()
-                self._monitor_stop_event = threading.Event()
-
-                # 启动进程 - 使用pipe获取输出
-                self._server_process = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    bufsize=1,  # 行缓冲
-                    cwd=str(self._plugin_dir)
-                )
-
-                logger.info(f"服务器进程已启动，PID: {self._server_process.pid}")
-
-                # 启动日志读取线程
-                self._log_thread = threading.Thread(
-                    target=self._log_reader_thread,
-                    args=(self._server_process, self._log_stop_event),
-                    daemon=True
-                )
-                self._log_thread.start()
-                logger.info("日志读取线程已启动")
-
-                # 检查服务器是否成功启动
-                max_time = self._config['max_startup_time']
-                logger.info("等待服务器启动，最长等待{}秒".format(max_time))
-                startup_successful = self._wait_for_server_startup()
-
-                if startup_successful:
-                    host = self._config['host']
-                    port = self._config['port']
-                    logger.info(f"MCP服务器已启动 - {host}:{port}")
-
-                    # 启动进程监控线程
-                    if self._config["auto_restart"]:
-                        self._monitor_thread = threading.Thread(
-                            target=self._monitor_process_thread,
-                            args=(self._monitor_stop_event,),
-                            daemon=True
-                        )
-                        self._monitor_thread.start()
-                        logger.info("进程监控线程已启动，将自动重启意外终止的服务器")
-                else:
-                    # 终止进程
-                    self._stop_server()
-                    error_msg = "服务器启动超时或健康检查失败，请检查日志"
-                    logger.error(error_msg)
-                    raise Exception(error_msg)
-
+                launcher_script.chmod(0o755)
             except Exception as e:
-                logger.error(f"启动MCP服务器失败: {str(e)}")
-                logger.error(traceback.format_exc())
-                self._enable = False
-                self._server_process = None
+                logger.warning(f"无法设置脚本执行权限: {e}")
+
+            # 准备初始token
+            auth_token = self._config.get("auth_token", "")
+            if not auth_token:
+                # 如果没有token则生成新token
+                auth_token = generate_token(32)
+                self._config["auth_token"] = auth_token
+                # 保存新生成的token到配置
+                self.update_config({
+                    "enable": self._enable,
+                    "config": self._config
+                })
+                logger.info("已生成新的API认证token")
+
+            logger.info("API认证已启用，需要Bearer Token才能访问")
+
+            # 构建启动命令
+            cmd = [
+                str(self._python_bin),
+                str(launcher_script),
+                "--host", self._config["host"],
+                "--port", str(self._config["port"]),
+                "--log-level", self._config["log_level"]
+            ]
+
+            # 添加认证参数
+            if auth_token:
+                cmd.extend(["--auth-token", auth_token])
+
+            logger.info(f"启动命令: {' '.join(cmd)}")
+
+            # 停止现有的线程
+            self._stop_all_threads()
+
+            # 创建新的停止事件
+            self._log_stop_event = threading.Event()
+            self._monitor_stop_event = threading.Event()
+
+            # 启动进程 - 使用pipe获取输出
+            self._server_process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,  # 行缓冲
+                cwd=str(self._plugin_dir)
+            )
+
+            logger.info(f"服务器进程已启动，PID: {self._server_process.pid}")
+
+            # 启动日志读取线程
+            self._start_log_thread()
+
+            # 检查服务器是否成功启动
+            if self._wait_for_server_startup():
+                logger.info(
+                    f"MCP服务器已启动 - {self._config['host']}:{self._config['port']}"
+                )
+
+                # 启动进程监控线程
+                if self._config["auto_restart"]:
+                    self._start_monitor_thread()
+            else:
+                # 终止进程
+                self._stop_server()
+                error_msg = "服务器启动超时或健康检查失败，请检查日志"
+                logger.error(error_msg)
+                raise Exception(error_msg)
+
+        except Exception as e:
+            logger.error(f"启动MCP服务器失败: {str(e)}")
+            logger.error(traceback.format_exc())
+            self._enable = False
+            self._server_process = None
+
+    def _stop_all_threads(self):
+        """停止所有线程"""
+        self._stop_log_thread()
+        self._stop_monitor_thread()
+
+    def _start_log_thread(self):
+        """启动日志读取线程"""
+        self._log_thread = threading.Thread(
+            target=self._log_reader_thread,
+            args=(self._server_process, self._log_stop_event),
+            daemon=True
+        )
+        self._log_thread.start()
+        logger.info("日志读取线程已启动")
+
+    def _start_monitor_thread(self):
+        """启动进程监控线程"""
+        self._monitor_thread = threading.Thread(
+            target=self._monitor_process_thread,
+            args=(self._monitor_stop_event,),
+            daemon=True
+        )
+        self._monitor_thread.start()
+        logger.info("进程监控线程已启动，将自动重启意外终止的服务器")
 
     def _check_and_clear_port(self):
         """检查端口是否被占用，如果被占用则尝试停止占用进程"""
@@ -261,61 +307,62 @@ class MCPServer(_PluginBase):
         try:
             s.bind((host, port))
             s.close()
-            logger.info("端口 {} 未被占用".format(port))
+            logger.info(f"端口 {port} 未被占用")
             return  # 端口未被占用，直接返回
         except socket.error:
-            logger.warning("端口 {} 已被占用，尝试处理".format(port))
+            logger.warning(f"端口 {port} 已被占用，尝试处理")
             s.close()
 
         # 端口被占用，尝试终止占用进程
         try:
             # 尝试终止占用进程
-            if self._try_kill_process_with_cmd():
+            if self._try_terminate_port_process():
                 # 成功终止进程，等待端口释放
                 if self._wait_for_port_release(port, host):
                     return
 
             # 如果无法释放端口，报告错误
-            logger.error("无法清理端口，请尝试以下操作:")
-            logger.error("1. 检查是否有其他程序占用了端口 {}".format(port))
-            logger.error("2. 手动终止占用端口的进程")
-            logger.error("3. 在插件设置中修改端口号后重新启动")
-            logger.error("4. 如果使用Docker，检查端口映射是否正确")
+            self._report_port_occupied(port)
 
-            # 提供进一步诊断信息
-            try:
-                # 尝试导入psutil提供更多信息
-                import psutil
-                for conn in psutil.net_connections(kind='inet'):
-                    if conn.laddr.port == port:
-                        if conn.pid:
-                            try:
-                                proc = psutil.Process(conn.pid)
-                                logger.error(
-                                    "占用端口 {} 的进程: PID={}, 名称={}, 命令行={}".format(
-                                        port, conn.pid, proc.name(), " ".join(proc.cmdline() or [])
-                                    )
-                                )
-                            except psutil.NoSuchProcess:
-                                logger.error(
-                                    "占用端口 {} 的进程: PID={}（进程不存在）".format(port, conn.pid))
-                        else:
-                            logger.error(
-                                "占用端口 {} 的连接信息: {}".format(port, conn))
-            except ImportError:
-                pass
-
-            raise RuntimeError(
-                "端口 {} 被占用且无法清理，请手动终止占用进程或修改端口配置"
-                .format(port)
-            )
+            raise RuntimeError(f"端口 {port} 被占用且无法清理，请手动终止占用进程或修改端口配置")
 
         except Exception as e:
-            logger.error("检查和清理端口时出错: {}".format(str(e)))
+            logger.error(f"检查和清理端口时出错: {str(e)}")
             logger.error(traceback.format_exc())
-            raise RuntimeError("无法启动MCP服务器: {}".format(str(e)))
+            raise RuntimeError(f"无法启动MCP服务器: {str(e)}")
 
-    def _try_kill_process_with_cmd(self) -> bool:
+    def _report_port_occupied(self, port):
+        """报告端口占用情况"""
+        logger.error("无法清理端口，请尝试以下操作:")
+        logger.error(f"1. 检查是否有其他程序占用了端口 {port}")
+        logger.error("2. 手动终止占用端口的进程")
+        logger.error("3. 在插件设置中修改端口号后重新启动")
+        logger.error("4. 如果使用Docker，检查端口映射是否正确")
+
+        # 提供进一步诊断信息
+        try:
+            # 尝试导入psutil提供更多信息
+            import psutil
+            for conn in psutil.net_connections(kind='inet'):
+                if conn.laddr.port == port:
+                    if conn.pid:
+                        try:
+                            proc = psutil.Process(conn.pid)
+                            logger.error(
+                                f"占用端口 {port} 的进程: PID={conn.pid}, "
+                                f"名称={proc.name()}, "
+                                f"命令行={' '.join(proc.cmdline() or [])}"
+                            )
+                        except psutil.NoSuchProcess:
+                            logger.error(
+                                f"占用端口 {port} 的进程: PID={conn.pid}（进程不存在）"
+                            )
+                    else:
+                        logger.error(f"占用端口 {port} 的连接信息: {conn}")
+        except ImportError:
+            pass
+
+    def _try_terminate_port_process(self) -> bool:
         """尝试查找并终止占用端口的进程，使用psutil库"""
         port = self._config["port"]
         host = self._config["host"]
@@ -323,62 +370,78 @@ class MCPServer(_PluginBase):
         try:
             # 尝试导入psutil
             import psutil
-            logger.info("使用psutil查找占用端口 {} 的进程".format(port))
+            logger.info(f"使用psutil查找占用端口 {port} 的进程")
 
             # 查找占用端口的进程
             for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
                 try:
                     for conn in proc.connections(kind='inet'):
-                        if conn.laddr.port == port and (conn.laddr.ip == host
-                                                        or conn.laddr.ip == '0.0.0.0'
-                                                        or conn.laddr.ip == '::'):
+                        # 检查是否是指定端口的连接
+                        is_target_port = conn.laddr.port == port
+                        is_bind_addr = (conn.laddr.ip == host or
+                                        conn.laddr.ip == '0.0.0.0' or
+                                        conn.laddr.ip == '::')
+
+                        if is_target_port and is_bind_addr:
                             pid = proc.pid
-                            logger.info("找到占用端口的进程 PID: {}".format(pid))
+                            logger.info(f"找到占用端口的进程 PID: {pid}")
 
                             # 检查是否为Python进程和MCP服务器
                             cmd_line = " ".join(
-                                proc.cmdline() if proc.cmdline() else [])
-                            logger.info("进程命令行: {}".format(cmd_line))
+                                proc.cmdline() if proc.cmdline() else []
+                            )
+                            logger.info(f"进程命令行: {cmd_line}")
 
                             # 判断是否为MCP服务器进程
                             is_python = "python" in cmd_line.lower()
                             is_server = "server.py" in cmd_line
 
                             if is_python and is_server:
-                                logger.info("确认是MCP服务器进程，尝试终止")
-                                proc.terminate()
-                                gone, alive = psutil.wait_procs(
-                                    [proc], timeout=3)
-                                if proc in alive:
-                                    logger.warning("进程未响应终止信号，尝试强制终止")
-                                    proc.kill()
-                                logger.info("成功终止占用端口的进程")
-                                return True
+                                return self._terminate_process(proc)
                             else:
                                 logger.warning("占用端口的不是MCP服务器进程，不自动终止")
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                     continue
 
-            logger.warning("未找到占用端口 {} 的MCP服务器进程".format(port))
+            logger.warning(f"未找到占用端口 {port} 的MCP服务器进程")
             return False
 
         except ImportError:
             logger.error("psutil模块未安装，无法查找和终止占用端口的进程")
             return False
         except Exception as e:
-            logger.error("使用psutil查找和终止进程时出错: {}".format(str(e)))
+            logger.error(f"使用psutil查找和终止进程时出错: {str(e)}")
+            return False
+
+    def _terminate_process(self, proc) -> bool:
+        """终止指定进程"""
+        try:
+            import psutil
+
+            logger.info("确认是MCP服务器进程，尝试终止")
+            proc.terminate()
+            gone, alive = psutil.wait_procs([proc], timeout=3)
+
+            if proc in alive:
+                logger.warning("进程未响应终止信号，尝试强制终止")
+                proc.kill()
+
+            logger.info("成功终止占用端口的进程")
+            return True
+        except Exception as e:
+            logger.error(f"终止进程失败: {str(e)}")
             return False
 
     def _wait_for_port_release(self, port, host, timeout=10) -> bool:
         """等待端口释放"""
-        logger.info("等待端口 {} 释放...".format(port))
+        logger.info(f"等待端口 {port} 释放...")
         start_time = time.time()
         while time.time() - start_time < timeout:
             try:
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 s.bind((host, port))
                 s.close()
-                logger.info("端口 {} 已释放，可以启动服务器".format(port))
+                logger.info(f"端口 {port} 已释放，可以启动服务器")
                 return True
             except socket.error:
                 time.sleep(0.5)
@@ -394,18 +457,16 @@ class MCPServer(_PluginBase):
             while not stop_event.is_set():
                 # 检查进程是否仍在运行
                 has_process = self._server_process is not None
-                terminated = (has_process and
-                              self._server_process.poll() is not None)
+                terminated = (
+                    has_process and self._server_process.poll() is not None)
 
                 if has_process and terminated:
                     exitcode = self._server_process.poll()
-                    logger.warning(
-                        "服务器进程意外终止，返回码: {}，准备重启".format(exitcode)
-                    )
+                    logger.warning(f"服务器进程意外终止，返回码: {exitcode}，准备重启")
 
                     # 等待一段时间后重启
                     delay = self._config["restart_delay"]
-                    logger.info("将在{}秒后重启服务器".format(delay))
+                    logger.info(f"将在{delay}秒后重启服务器")
 
                     # 使用事件等待，以便能响应停止信号
                     if stop_event.wait(delay):
@@ -419,8 +480,8 @@ class MCPServer(_PluginBase):
 
                     # 如果启动失败，避免立即重试
                     no_process = self._server_process is None
-                    failed = (has_process and
-                              self._server_process.poll() is not None)
+                    failed = (
+                        has_process and self._server_process.poll() is not None)
 
                     if no_process or failed:
                         logger.error("服务器重启失败，将暂停监控一段时间")
@@ -432,7 +493,7 @@ class MCPServer(_PluginBase):
                     break
 
         except Exception as e:
-            logger.error("进程监控线程发生异常: {}".format(str(e)))
+            logger.error(f"进程监控线程发生异常: {str(e)}")
             logger.error(traceback.format_exc())
         finally:
             logger.info("进程监控线程已结束")
@@ -464,40 +525,50 @@ class MCPServer(_PluginBase):
                 stdout_line = process.stdout.readline()
                 if stdout_line:
                     # 记录标准输出
-                    logger.info("MCP服务器: {}".format(stdout_line.rstrip()))
+                    logger.info(f"MCP服务器: {stdout_line.rstrip()}")
 
                 # 检查stderr是否有数据
                 stderr_line = process.stderr.readline()
                 if stderr_line:
                     # 记录错误输出
-                    logger.error("MCP服务器错误: {}".format(stderr_line.rstrip()))
+                    logger.error(f"MCP服务器错误: {stderr_line.rstrip()}")
 
                 # 如果两个流都没有读到数据，短暂休眠避免CPU占用
                 if not stdout_line and not stderr_line:
                     time.sleep(0.1)
 
             # 进程已结束，尝试读取剩余输出
-            remaining_stdout, remaining_stderr = process.communicate()
+            if process.poll() is not None:
+                self._read_remaining_output(process)
+
+        except Exception as e:
+            logger.error(f"日志读取线程发生异常: {str(e)}")
+            logger.error(traceback.format_exc())
+        finally:
+            logger.info("日志读取线程已结束")
+
+    def _read_remaining_output(self, process):
+        """读取进程的剩余输出"""
+        try:
+            remaining_stdout, remaining_stderr = process.communicate(timeout=2)
 
             if remaining_stdout:
                 for line in remaining_stdout.splitlines():
                     if line:
-                        logger.info("MCP服务器(结束): {}".format(line))
+                        logger.info(f"MCP服务器(结束): {line}")
 
             if remaining_stderr:
                 for line in remaining_stderr.splitlines():
                     if line:
-                        logger.error("MCP服务器错误(结束): {}".format(line))
+                        logger.error(f"MCP服务器错误(结束): {line}")
 
             # 记录进程退出状态
             exitcode = process.poll()
-            logger.info("MCP服务器进程已退出，返回码: {}".format(exitcode))
-
+            logger.info(f"MCP服务器进程已退出，返回码: {exitcode}")
+        except subprocess.TimeoutExpired:
+            logger.warning("读取进程剩余输出超时")
         except Exception as e:
-            logger.error("日志读取线程发生异常: {}".format(str(e)))
-            logger.error(traceback.format_exc())
-        finally:
-            logger.info("日志读取线程已结束")
+            logger.error(f"读取剩余输出时发生错误: {str(e)}")
 
     def _stop_log_thread(self):
         """停止日志读取线程"""
@@ -519,8 +590,12 @@ class MCPServer(_PluginBase):
         """等待服务器启动并进行健康检查"""
         start_time = time.time()
         check_count = 0
+        max_time = self._config["max_startup_time"]
+        interval = self._config["health_check_interval"]
 
-        while time.time() - start_time < self._config["max_startup_time"]:
+        logger.info(f"等待服务器启动，最长等待{max_time}秒")
+
+        while time.time() - start_time < max_time:
             # 检查进程是否仍在运行
             if self._server_process.poll() is not None:
                 exitcode = self._server_process.poll()
@@ -531,32 +606,35 @@ class MCPServer(_PluginBase):
             try:
                 check_count += 1
                 url = self._health_check_url
-                logger.info("健康检查 #{}: 请求 {}".format(check_count, url))
+                logger.info(f"健康检查 #{check_count}: 请求 {url}")
 
-                response = requests.get(url, timeout=2)
-                logger.info("健康检查返回: HTTP {}".format(response.status_code))
+                # 在请求中加入token
+                headers = {}
+                auth_token = self._config.get("auth_token")
+                if auth_token:
+                    headers["Authorization"] = f"Bearer {auth_token}"
+
+                response = requests.get(url, headers=headers, timeout=2)
+                status = response.status_code
+                logger.info(f"健康检查返回: HTTP {status}")
 
                 # MCP端点会返回404或406状态码表示存在但未找到路由
-                if response.status_code in [404, 406]:
+                if status in [404, 406]:
                     logger.info("健康检查通过: 服务器正在运行")
                     return True
             except requests.RequestException as e:
-                logger.info("健康检查失败: {}".format(str(e)))
+                logger.info(f"健康检查失败: {str(e)}")
 
             # 等待一段时间后再次检查
-            time.sleep(self._config["health_check_interval"])
+            time.sleep(interval)
 
-        max_time = self._config["max_startup_time"]
-        logger.error("等待服务器启动超时 ({})秒".format(max_time))
+        logger.error(f"等待服务器启动超时 ({max_time})秒")
         return False
 
     def _stop_server(self):
         """停止MCP服务器进程"""
-        # 先停止监控线程
-        self._stop_monitor_thread()
-
-        # 然后停止日志读取线程
-        self._stop_log_thread()
+        # 先停止所有线程
+        self._stop_all_threads()
 
         if self._server_process is not None:
             try:
@@ -593,7 +671,9 @@ class MCPServer(_PluginBase):
             "url": None,
             "health": False,
             "venv_path": str(self._venv_path) if self._venv_path else None,
-            "python_bin": str(self._python_bin) if self._python_bin else None
+            "python_bin": str(self._python_bin) if self._python_bin else None,
+            "auth_token": self._mask_token(self._config.get("auth_token", "")),
+            "requires_auth": True
         }
 
         if self._server_process and self._server_process.poll() is None:
@@ -605,13 +685,66 @@ class MCPServer(_PluginBase):
 
             # 尝试进行健康检查
             try:
-                response = requests.get(self._health_check_url, timeout=2)
-                # MCP端点通常返回404
-                status["health"] = response.status_code == 404
+                # 在请求中加入token
+                headers = {}
+                auth_token = self._config.get("auth_token")
+                if auth_token:
+                    headers["Authorization"] = f"Bearer {auth_token}"
+
+                response = requests.get(
+                    self._health_check_url,
+                    headers=headers,
+                    timeout=2
+                )
+                # MCP端点通常返回404或406
+                status["health"] = response.status_code in [404, 406]
             except requests.RequestException:
                 status["health"] = False
 
         return status
+
+    def _mask_token(self, token: str) -> str:
+        """掩盖token，只显示前4位和后4位"""
+        if not token or len(token) < 10:
+            return "******" if token else ""
+        return f"{token[:4]}...{token[-4:]}"
+
+    def _generate_new_token(self) -> Dict[str, Any]:
+        """API Endpoint: 生成新的API令牌"""
+        try:
+            # 生成新token
+            new_token = generate_token(32)
+
+            # 更新插件配置中的令牌
+            self._config["auth_token"] = new_token
+
+            # 保存配置
+            self.update_config({
+                "enable": self._enable,
+                "config": self._config
+            })
+
+            # 检查服务器是否正在运行，如果在运行需要提示用户重启
+            if self._server_process and self._server_process.poll() is None:
+                message = "已生成新的API Token，需要重启服务器才能生效"
+                logger.info("已生成新token，但需要重启服务器才能应用")
+            else:
+                # 服务器未运行，将在启动时使用新token
+                message = "已生成新的API Token，将在服务器启动时生效"
+                logger.info("已生成新token，将在服务器启动时生效")
+
+            return {
+                "message": message,
+                "status": "success",
+                "token": new_token,
+                "masked_token": self._mask_token(new_token)
+            }
+        except Exception as e:
+            logger.error(f"生成新token失败: {str(e)}")
+            return {
+                "message": f"生成新token失败: {str(e)}",
+                "status": "error"
+            }
 
     def get_state(self) -> bool:
         """获取服务器状态"""
@@ -717,6 +850,13 @@ class MCPServer(_PluginBase):
                 "methods": ["POST"],
                 "auth": "bear",
                 "summary": "重启服务器"
+            },
+            {
+                "path": "/generate_token",
+                "endpoint": self._generate_new_token,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "生成新的API令牌"
             }
         ]
 
@@ -724,6 +864,7 @@ class MCPServer(_PluginBase):
     @staticmethod
     def get_render_mode() -> Tuple[str, Optional[str]]:
         """Declare Vue rendering mode and assets path."""
+        # 不要添加任何查询参数，保持路径纯净
         return "vue", "dist/assets"
 
     # --- Other Base Methods ---

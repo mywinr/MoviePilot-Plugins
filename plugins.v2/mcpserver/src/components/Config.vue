@@ -2,7 +2,7 @@
   <div class="plugin-config">
     <v-card>
       <v-card-item>
-        <v-card-title>MCP Server</v-card-title>
+        <v-card-title>插件配置</v-card-title>
         <template #append>
           <v-btn icon color="primary" variant="text" @click="notifyClose">
             <v-icon left>mdi-close</v-icon>

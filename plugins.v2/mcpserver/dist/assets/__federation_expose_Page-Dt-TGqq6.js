@@ -90,7 +90,7 @@ async function refreshData() {
     };
 
     // 演示使用api模块调用插件接口
-    recentItems.value = await props.api.get(`plugin/MyPlugin/history`);
+    recentItems.value = await props.api.get(`plugin/mcpserver/history`);
 
     status.value = Math.random() > 0.2 ? 'running' : 'paused';
     lastUpdated.value = new Date().toLocaleString();
