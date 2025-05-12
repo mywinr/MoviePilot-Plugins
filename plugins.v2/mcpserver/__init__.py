@@ -29,9 +29,9 @@ class MCPServer(_PluginBase):
     # 插件描述
     plugin_desc = "启动MCP服务器实现大模型操作MoviePilot"
     # 插件图标
-    plugin_icon = "https://avatars.githubusercontent.com/u/182288589?s=200&v=4"
+    plugin_icon = "mcp.png"
     # 插件版本
-    plugin_version = "1.4"
+    plugin_version = "1.5"
     # 插件作者
     plugin_author = "DzAvril"
     # 作者主页
@@ -89,9 +89,8 @@ class MCPServer(_PluginBase):
         self._server_script_path = self._plugin_dir / "server.py"
 
         # 设置健康检查URL
-        host = self._config["host"]
-        port = self._config["port"]
-        self._health_check_url = f"http://{host}:{port}/mcp"
+        port = int(self._config["port"])
+        self._health_check_url = f"http://localhost:{port}/mcp"
 
         if not self._enable:
             self._stop_server()
@@ -299,9 +298,30 @@ class MCPServer(_PluginBase):
 
     def _check_and_clear_port(self):
         """检查端口是否被占用，如果被占用则尝试停止占用进程"""
-        port = self._config["port"]
+        port = int(self._config["port"])
         host = self._config["host"]
 
+        # 判断地址类型：IPv4 or IPv6
+        try:
+            # getaddrinfo 自动判断协议族
+            addr_info = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+        except socket.gaierror as e:
+            logger.error(f"地址解析失败: {host}, error: {e}")
+            return
+
+        family = addr_info[0][0]  # AF_INET or AF_INET6
+        sock_type = addr_info[0][1]
+
+        s = socket.socket(family, sock_type)
+        try:
+            s.bind((host, port))
+            s.close()
+            logger.info(f"端口 {port}（{host}）未被占用")
+            return
+        except socket.error as e:
+            logger.warning(f"端口 {port}（{host}）已被占用，尝试处理: {e}")
+            s.close()
+        
         # 检查端口是否被占用
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
@@ -309,8 +329,8 @@ class MCPServer(_PluginBase):
             s.close()
             logger.info(f"端口 {port} 未被占用")
             return  # 端口未被占用，直接返回
-        except socket.error:
-            logger.warning(f"端口 {port} 已被占用，尝试处理")
+        except Exception as e:
+            logger.warning(f"端口 {port} 已被占用 {str(e)}，尝试处理")
             s.close()
 
         # 端口被占用，尝试终止占用进程
@@ -364,7 +384,7 @@ class MCPServer(_PluginBase):
 
     def _try_terminate_port_process(self) -> bool:
         """尝试查找并终止占用端口的进程，使用psutil库"""
-        port = self._config["port"]
+        port = int(self._config["port"])
         host = self._config["host"]
 
         try:
