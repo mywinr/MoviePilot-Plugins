@@ -50,21 +50,39 @@
                 readonly
               >
                 <template v-slot:append>
-                  <v-tooltip text="重置API密钥">
-                    <template v-slot:activator="{ props }">
-                      <v-btn
-                        v-bind="props"
-                        icon
-                        variant="text"
-                        color="warning"
-                        size="small"
-                        :loading="resettingApiKey"
-                        @click="resetApiKey"
-                      >
-                        <v-icon>mdi-key-alert</v-icon>
-                      </v-btn>
-                    </template>
-                  </v-tooltip>
+                  <div class="d-flex">
+                    <v-tooltip text="复制API密钥">
+                      <template v-slot:activator="{ props }">
+                        <v-btn
+                          v-bind="props"
+                          icon
+                          variant="text"
+                          color="info"
+                          size="small"
+                          :loading="copyingApiKey"
+                          @click="copyApiKey"
+                          class="mr-1"
+                        >
+                          <v-icon>mdi-content-copy</v-icon>
+                        </v-btn>
+                      </template>
+                    </v-tooltip>
+                    <v-tooltip text="重置API密钥">
+                      <template v-slot:activator="{ props }">
+                        <v-btn
+                          v-bind="props"
+                          icon
+                          variant="text"
+                          color="warning"
+                          size="small"
+                          :loading="resettingApiKey"
+                          @click="resetApiKey"
+                        >
+                          <v-icon>mdi-key-alert</v-icon>
+                        </v-btn>
+                      </template>
+                    </v-tooltip>
+                  </div>
                 </template>
               </v-text-field>
             </v-col>
@@ -72,7 +90,8 @@
         </v-form>
       </v-card-text>
       <v-card-actions>
-        <v-btn color="secondary" @click="resetForm">重置</v-btn>
+        <v-btn color="secondary" @click="resetForm" variant="text">重置</v-btn>
+        <v-btn color="info" @click="notifySwitch" prepend-icon="mdi-arrow-left" variant="text">返回服务器状态</v-btn>
         <v-spacer></v-spacer>
         <v-btn color="primary" :disabled="!isFormValid" @click="saveConfig" :loading="saving">保存配置</v-btn>
       </v-card-actions>
@@ -103,6 +122,7 @@ const successMessage = ref(null)
 const saving = ref(false)
 const showApiKey = ref(false)
 const resettingApiKey = ref(false)
+const copyingApiKey = ref(false)
 
 // 配置数据，使用默认值和初始配置合并
 const defaultConfig = {
@@ -246,4 +266,126 @@ async function resetApiKey() {
 function notifyClose() {
   emit('close')
 }
+
+// 通知主应用切换到服务器状态页面
+function notifySwitch() {
+  emit('switch')
+}
+
+// 复制API密钥到剪贴板
+async function copyApiKey() {
+  if (!config.auth_token) {
+    error.value = 'API密钥为空，无法复制'
+    setTimeout(() => { error.value = null }, 3000)
+    return
+  }
+
+  copyingApiKey.value = true
+  successMessage.value = null
+  error.value = null
+
+  try {
+    // 使用更可靠的复制方法
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(config.auth_token)
+      showCopySuccess()
+    } else {
+      // 备用复制方法
+      fallbackCopy(config.auth_token)
+    }
+  } catch (err) {
+    console.error('复制API密钥失败:', err)
+    fallbackCopy(config.auth_token)
+  } finally {
+    copyingApiKey.value = false
+  }
+
+  // 备用复制方法 - 创建临时文本区域
+  function fallbackCopy(text) {
+    const textArea = document.createElement('textarea')
+    textArea.value = text
+
+    // 设置样式使元素不可见
+    textArea.style.position = 'fixed'
+    textArea.style.left = '-999999px'
+    textArea.style.top = '-999999px'
+    document.body.appendChild(textArea)
+
+    // 选择并复制文本
+    textArea.focus()
+    textArea.select()
+
+    let success = false
+    try {
+      success = document.execCommand('copy')
+      if (success) {
+        showCopySuccess()
+      } else {
+        error.value = '复制失败，请手动复制'
+        setTimeout(() => { error.value = null }, 3000)
+      }
+    } catch (err) {
+      console.error('execCommand复制失败:', err)
+      error.value = '复制失败，请手动复制'
+      setTimeout(() => { error.value = null }, 3000)
+    }
+
+    // 清理
+    document.body.removeChild(textArea)
+  }
+
+  // 显示复制成功的消息
+  function showCopySuccess() {
+    successMessage.value = 'API密钥已复制到剪贴板'
+    setTimeout(() => { successMessage.value = null }, 3000)
+
+    // 创建一个临时的成功提示元素
+    const notification = document.createElement('div')
+    notification.textContent = '✓ 已复制!'
+    notification.className = 'copy-notification'
+    document.body.appendChild(notification)
+
+    // 2秒后移除通知
+    setTimeout(() => {
+      notification.classList.add('fade-out')
+      setTimeout(() => {
+        document.body.removeChild(notification)
+      }, 500)
+    }, 1500)
+  }
+}
 </script>
+
+<style scoped>
+/* 复制成功通知样式 */
+.copy-notification {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: rgba(76, 175, 80, 0.9);
+  color: white;
+  padding: 8px 16px;
+  border-radius: 4px;
+  font-size: 14px;
+  z-index: 9999;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+  animation: slide-in 0.3s ease-out;
+}
+
+.fade-out {
+  opacity: 0;
+  transition: opacity 0.5s ease-out;
+}
+
+@keyframes slide-in {
+  0% {
+    transform: translate(-50%, -20px);
+    opacity: 0;
+  }
+  100% {
+    transform: translate(-50%, 0);
+    opacity: 1;
+  }
+}
+</style>

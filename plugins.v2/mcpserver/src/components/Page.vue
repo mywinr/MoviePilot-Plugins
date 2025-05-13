@@ -1,78 +1,110 @@
 <template>
   <div class="plugin-page">
-    <v-card>
-      <v-card-item>
-        <v-card-title>{{ title }}</v-card-title>
-        <template #append>
-          <v-btn icon color="primary" variant="text" @click="notifyClose">
-            <v-icon left>mdi-close</v-icon>
-          </v-btn>
-        </template>
-      </v-card-item>
-      <v-card-text>
-        <v-alert v-if="error" type="error" class="mb-4">{{ error }}</v-alert>
-        <v-skeleton-loader v-if="loading" type="card"></v-skeleton-loader>
-        <div v-else>
-          <!-- 数据统计展示 -->
-          <v-row v-if="stats">
-            <v-col v-for="(value, key) in stats" :key="key" cols="12" sm="6" md="4">
-              <v-card variant="outlined" class="text-center">
-                <v-card-text>
-                  <div class="text-h4 font-weight-bold">{{ value }}</div>
-                  <div class="text-subtitle-1">{{ key }}</div>
-                </v-card-text>
-              </v-card>
-            </v-col>
-          </v-row>
+    <v-card flat class="rounded border">
+      <!-- 标题区域 -->
+      <v-card-title class="text-subtitle-1 d-flex align-center px-3 py-2 bg-primary-lighten-5">
+        <v-icon icon="mdi-server" class="mr-2" color="primary" size="small" />
+        <span>MCP 服务器</span>
+      </v-card-title>
 
-          <!-- 最近记录展示 -->
-          <div v-if="recentItems && recentItems.length" class="mt-4">
-            <div class="text-h6 mb-2">最近记录</div>
-            <v-timeline density="compact">
-              <v-timeline-item
-                v-for="(item, index) in recentItems"
-                :key="index"
-                :dot-color="getItemColor(item.type)"
-                size="small"
-              >
-                <div class="d-flex align-center">
-                  <v-icon :color="getItemColor(item.type)" size="small" class="mr-2">
-                    {{ getItemIcon(item.type) }}
-                  </v-icon>
-                  <span class="font-weight-medium">{{ item.title }}</span>
-                </div>
-                <div class="text-caption text-secondary">{{ item.time }}</div>
-              </v-timeline-item>
-            </v-timeline>
-          </div>
+      <!-- 通知区域 -->
+      <v-card-text class="px-3 py-2">
+        <v-alert v-if="error" type="error" density="compact" class="mb-2 text-caption" variant="tonal" closable>{{ error }}</v-alert>
+        <v-alert v-if="actionMessage" :type="actionMessageType" density="compact" class="mb-2 text-caption" variant="tonal" closable>{{ actionMessage }}</v-alert>
 
-          <!-- 当前状态 -->
-          <div class="mt-4 text-subtitle-2">
-            <div>
-              <strong>状态:</strong>
-              <v-chip size="small" :color="status === 'running' ? 'success' : 'warning'">{{ status }}</v-chip>
-            </div>
-            <div><strong>最后更新:</strong> {{ lastUpdated }}</div>
-          </div>
+        <v-skeleton-loader v-if="loading && !initialDataLoaded" type="article, actions"></v-skeleton-loader>
+
+        <div v-if="initialDataLoaded" class="my-1">
+          <!-- 服务器状态卡片 -->
+          <v-card flat class="rounded mb-3 border config-card">
+            <v-card-title class="text-caption d-flex align-center px-3 py-2 bg-primary-lighten-5">
+              <v-icon icon="mdi-information" class="mr-2" color="primary" size="small" />
+              <span>服务器状态</span>
+            </v-card-title>
+            <v-card-text class="pa-0">
+              <v-list class="bg-transparent pa-0">
+                <v-list-item class="px-3 py-1">
+                  <template v-slot:prepend>
+                    <v-icon :color="serverStatus.running ? 'success' : 'grey'" icon="mdi-power" size="small" />
+                  </template>
+                  <v-list-item-title class="text-caption">运行状态</v-list-item-title>
+                  <template v-slot:append>
+                    <v-chip
+                      :color="serverStatus.running ? 'success' : 'grey'"
+                      size="x-small"
+                      variant="tonal"
+                    >
+                      {{ serverStatus.running ? '运行中' : '已停止' }}
+                    </v-chip>
+                  </template>
+                </v-list-item>
+                <v-divider class="my-1"></v-divider>
+                <v-list-item class="px-3 py-1">
+                  <template v-slot:prepend>
+                    <v-icon icon="mdi-identifier" color="primary" size="small" />
+                  </template>
+                  <v-list-item-title class="text-caption">进程 ID</v-list-item-title>
+                  <template v-slot:append>
+                    <span class="text-caption">{{ serverStatus.pid || '无' }}</span>
+                  </template>
+                </v-list-item>
+                <v-divider class="my-1"></v-divider>
+                <v-list-item class="px-3 py-1">
+                  <template v-slot:prepend>
+                    <v-icon :color="serverStatus.health ? 'success' : 'error'" icon="mdi-heart-pulse" size="small" />
+                  </template>
+                  <v-list-item-title class="text-caption">健康状态</v-list-item-title>
+                  <template v-slot:append>
+                    <v-chip
+                      :color="serverStatus.health ? 'success' : 'error'"
+                      size="x-small"
+                      variant="tonal"
+                    >
+                      {{ serverStatus.health ? '正常' : '异常' }}
+                    </v-chip>
+                  </template>
+                </v-list-item>
+                <v-divider class="my-1"></v-divider>
+                <v-list-item class="px-3 py-1">
+                  <template v-slot:prepend>
+                    <v-icon icon="mdi-link" color="info" size="small" />
+                  </template>
+                  <v-list-item-title class="text-caption">服务地址</v-list-item-title>
+                  <template v-slot:append>
+                    <span class="text-caption">{{ serverStatus.url || '未知' }}</span>
+                  </template>
+                </v-list-item>
+              </v-list>
+            </v-card-text>
+          </v-card>
         </div>
       </v-card-text>
-      <v-card-actions>
-        <v-btn color="primary" @click="refreshData" :loading="loading">
-          <v-icon left>mdi-refresh</v-icon>
-          刷新数据
-        </v-btn>
+
+      <v-divider></v-divider>
+
+      <!-- 操作按钮区域 -->
+      <v-card-actions class="px-2 py-1">
+        <v-btn color="primary" @click="notifySwitch" prepend-icon="mdi-cog" variant="text" size="small">配置</v-btn>
         <v-spacer></v-spacer>
-        <v-btn color="primary" @click="notifySwitch">
-          <v-icon left>mdi-cog</v-icon>
-          配置
+        <v-btn color="info" @click="fetchServerStatus" :loading="loading" prepend-icon="mdi-refresh" variant="text" size="small">刷新状态</v-btn>
+        <v-btn
+          color="success"
+          @click="restartServer"
+          :loading="restarting"
+          prepend-icon="mdi-restart"
+          variant="text"
+          size="small"
+        >
+          {{ serverStatus.running ? '重启服务器' : '启动服务器' }}
         </v-btn>
+        <v-btn color="grey" @click="notifyClose" prepend-icon="mdi-close" variant="text" size="small">关闭</v-btn>
       </v-card-actions>
     </v-card>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 
 // 接收初始配置
 const props = defineProps({
@@ -87,68 +119,115 @@ const props = defineProps({
 })
 
 // 组件状态
-const title = ref('插件详情页面')
-const loading = ref(true)
+const loading = ref(false)
 const error = ref(null)
-const stats = ref(null)
-const recentItems = ref([])
-const status = ref('running')
-const lastUpdated = ref('')
+const initialDataLoaded = ref(false)
+const restarting = ref(false)
+const actionMessage = ref(null)
+const actionMessageType = ref('info')
+
+// 服务器状态
+const serverStatus = reactive({
+  running: false,
+  pid: null,
+  url: null,
+  health: false,
+  requires_auth: true
+})
 
 // 自定义事件，用于通知主应用刷新数据
 const emit = defineEmits(['action', 'switch', 'close'])
 
-// 获取状态图标
-function getItemIcon(type) {
-  const icons = {
-    'movie': 'mdi-movie',
-    'tv': 'mdi-television-classic',
-    'download': 'mdi-download',
-    'error': 'mdi-alert-circle',
-    'success': 'mdi-check-circle',
-  }
-  return icons[type] || 'mdi-information'
+// 获取插件ID
+const getPluginId = () => {
+  return "MCPServer";
 }
 
-// 获取状态颜色
-function getItemColor(type) {
-  const colors = {
-    'movie': 'blue',
-    'tv': 'green',
-    'download': 'purple',
-    'error': 'red',
-    'success': 'success',
-  }
-  return colors[type] || 'grey'
-}
-
-// 获取和刷新数据
-async function refreshData() {
+// 获取服务器状态
+async function fetchServerStatus() {
   loading.value = true
   error.value = null
+  actionMessage.value = null
+
+  const pluginId = getPluginId()
+  if (!pluginId) {
+    loading.value = false
+    return
+  }
 
   try {
-    // 模拟数据
-    stats.value = {
-      '电影': Math.floor(Math.random() * 100) + 50,
-      '电视剧': Math.floor(Math.random() * 100) + 30,
-      '动漫': Math.floor(Math.random() * 100) + 20,
-      '纪录片': Math.floor(Math.random() * 100) + 10,
-      '综艺': Math.floor(Math.random() * 100) + 5,
+    console.log('尝试直接获取服务器状态...')
+    const statusData = await props.api.get(`plugin/${pluginId}/status`)
+    console.log('直接获取的状态数据:', statusData)
+
+    if (statusData && statusData.server_status) {
+      Object.assign(serverStatus, statusData.server_status)
+      initialDataLoaded.value = true
+      actionMessage.value = '已通过备用方法获取服务器状态'
+      actionMessageType.value = 'success'
+      setTimeout(() => { actionMessage.value = null }, 3000)
     }
-
-    // 演示使用api模块调用插件接口
-    recentItems.value = await props.api.get(`plugin/mcpserver/history`)
-
-    status.value = Math.random() > 0.2 ? 'running' : 'paused'
-    lastUpdated.value = new Date().toLocaleString()
   } catch (err) {
-    console.error('获取数据失败:', err)
-    error.value = err.message || '获取数据失败'
+    error.value = err.message || '获取服务器状态失败，请检查网络或API'
   } finally {
     loading.value = false
-    // 通知主应用组件已更新
-    emit('action')
+  }
+}
+
+// 重启服务器
+async function restartServer() {
+  restarting.value = true
+  error.value = null
+  actionMessage.value = null
+
+  const pluginId = getPluginId()
+  if (!pluginId) {
+    restarting.value = false
+    return
+  }
+
+  try {
+    // 调用重启API
+    const data = await props.api.post(`plugin/${pluginId}/restart`)
+
+    if (data) {
+      if (data.error) {
+        throw new Error(data.message || '重启服务器时发生错误')
+      }
+
+      // 更新服务器状态
+      if (data.server_status) {
+        Object.assign(serverStatus, data.server_status)
+      }
+
+      actionMessage.value = data.message || '服务器已重启'
+      actionMessageType.value = 'success'
+
+      // 设置多次刷新状态的定时器，确保能获取到最新状态
+      // 第一次刷新 - 3秒后
+      setTimeout(() => {
+        fetchServerStatus()
+
+        // 第二次刷新 - 8秒后
+        setTimeout(() => {
+          fetchServerStatus()
+
+          // 第三次刷新 - 15秒后（如果状态仍然是停止）
+          if (!serverStatus.running) {
+            setTimeout(() => fetchServerStatus(), 7000)
+          }
+        }, 5000)
+      }, 3000)
+    } else {
+      throw new Error('重启服务器响应无效或为空')
+    }
+  } catch (err) {
+    console.error('重启服务器失败:', err)
+    error.value = err.message || '重启服务器失败'
+    actionMessageType.value = 'error'
+  } finally {
+    restarting.value = false
+    setTimeout(() => { actionMessage.value = null }, 8000)
   }
 }
 
@@ -162,8 +241,47 @@ function notifyClose() {
   emit('close')
 }
 
+
+
+// 显示消息的辅助函数
+function showMessage(message, type = 'info') {
+  actionMessage.value = message
+  actionMessageType.value = type
+  setTimeout(() => { actionMessage.value = null }, 3000)
+}
+
 // 组件挂载时加载数据
 onMounted(() => {
-  refreshData()
+  fetchServerStatus()
 })
 </script>
+
+<style scoped>
+.plugin-page {
+  max-width: 80rem;
+  margin: 0 auto;
+  padding: 0.5rem;
+}
+
+.bg-primary-lighten-5 {
+  background-color: rgba(var(--v-theme-primary), 0.07);
+}
+
+.border {
+  border: thin solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+.config-card {
+  background-image: linear-gradient(to right, rgba(var(--v-theme-surface), 0.98), rgba(var(--v-theme-surface), 0.95)),
+                    repeating-linear-gradient(45deg, rgba(var(--v-theme-primary), 0.03), rgba(var(--v-theme-primary), 0.03) 10px, transparent 10px, transparent 20px);
+  background-attachment: fixed;
+  box-shadow: 0 1px 2px rgba(var(--v-border-color), 0.05) !important;
+  transition: all 0.3s ease;
+}
+
+.config-card:hover {
+  box-shadow: 0 3px 6px rgba(var(--v-border-color), 0.1) !important;
+}
+
+
+</style>

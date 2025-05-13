@@ -1,9 +1,11 @@
 import { importShared } from './__federation_fn_import-JrT3xvdd.js';
+import { _ as _export_sfc } from './_plugin-vue_export-helper-pcqpp-6-.js';
 
 const {createTextVNode:_createTextVNode,resolveComponent:_resolveComponent,withCtx:_withCtx,createVNode:_createVNode,toDisplayString:_toDisplayString,openBlock:_openBlock,createBlock:_createBlock,createCommentVNode:_createCommentVNode,createElementVNode:_createElementVNode,mergeProps:_mergeProps,withModifiers:_withModifiers,createElementBlock:_createElementBlock} = await importShared('vue');
 
 
 const _hoisted_1 = { class: "plugin-config" };
+const _hoisted_2 = { class: "d-flex" };
 
 const {ref,reactive,onMounted} = await importShared('vue');
 
@@ -35,6 +37,7 @@ const successMessage = ref(null);
 const saving = ref(false);
 const showApiKey = ref(false);
 const resettingApiKey = ref(false);
+const copyingApiKey = ref(false);
 
 // 配置数据，使用默认值和初始配置合并
 const defaultConfig = {
@@ -179,6 +182,94 @@ function notifyClose() {
   emit('close');
 }
 
+// 通知主应用切换到服务器状态页面
+function notifySwitch() {
+  emit('switch');
+}
+
+// 复制API密钥到剪贴板
+async function copyApiKey() {
+  if (!config.auth_token) {
+    error.value = 'API密钥为空，无法复制';
+    setTimeout(() => { error.value = null; }, 3000);
+    return
+  }
+
+  copyingApiKey.value = true;
+  successMessage.value = null;
+  error.value = null;
+
+  try {
+    // 使用更可靠的复制方法
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(config.auth_token);
+      showCopySuccess();
+    } else {
+      // 备用复制方法
+      fallbackCopy(config.auth_token);
+    }
+  } catch (err) {
+    console.error('复制API密钥失败:', err);
+    fallbackCopy(config.auth_token);
+  } finally {
+    copyingApiKey.value = false;
+  }
+
+  // 备用复制方法 - 创建临时文本区域
+  function fallbackCopy(text) {
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+
+    // 设置样式使元素不可见
+    textArea.style.position = 'fixed';
+    textArea.style.left = '-999999px';
+    textArea.style.top = '-999999px';
+    document.body.appendChild(textArea);
+
+    // 选择并复制文本
+    textArea.focus();
+    textArea.select();
+
+    let success = false;
+    try {
+      success = document.execCommand('copy');
+      if (success) {
+        showCopySuccess();
+      } else {
+        error.value = '复制失败，请手动复制';
+        setTimeout(() => { error.value = null; }, 3000);
+      }
+    } catch (err) {
+      console.error('execCommand复制失败:', err);
+      error.value = '复制失败，请手动复制';
+      setTimeout(() => { error.value = null; }, 3000);
+    }
+
+    // 清理
+    document.body.removeChild(textArea);
+  }
+
+  // 显示复制成功的消息
+  function showCopySuccess() {
+    successMessage.value = 'API密钥已复制到剪贴板';
+    setTimeout(() => { successMessage.value = null; }, 3000);
+
+    // 创建一个临时的成功提示元素
+    const notification = document.createElement('div');
+    notification.textContent = '✓ 已复制!';
+    notification.className = 'copy-notification';
+    document.body.appendChild(notification);
+
+    // 2秒后移除通知
+    setTimeout(() => {
+      notification.classList.add('fade-out');
+      setTimeout(() => {
+        document.body.removeChild(notification);
+      }, 500);
+    }, 1500);
+  }
+}
+
 return (_ctx, _cache) => {
   const _component_v_card_title = _resolveComponent("v-card-title");
   const _component_v_icon = _resolveComponent("v-icon");
@@ -262,7 +353,7 @@ return (_ctx, _cache) => {
               onSubmit: _withModifiers(saveConfig, ["prevent"])
             }, {
               default: _withCtx(() => [
-                _cache[8] || (_cache[8] = _createElementVNode("div", { class: "text-subtitle-1 font-weight-bold mt-4 mb-2" }, "基本设置", -1)),
+                _cache[9] || (_cache[9] = _createElementVNode("div", { class: "text-subtitle-1 font-weight-bold mt-4 mb-2" }, "基本设置", -1)),
                 _createVNode(_component_v_row, null, {
                   default: _withCtx(() => [
                     _createVNode(_component_v_col, { cols: "12" }, {
@@ -282,7 +373,7 @@ return (_ctx, _cache) => {
                   ]),
                   _: 1
                 }),
-                _cache[9] || (_cache[9] = _createElementVNode("div", { class: "text-subtitle-1 font-weight-bold mt-4 mb-2" }, "MCP Server配置", -1)),
+                _cache[10] || (_cache[10] = _createElementVNode("div", { class: "text-subtitle-1 font-weight-bold mt-4 mb-2" }, "MCP Server配置", -1)),
                 _createVNode(_component_v_row, null, {
                   default: _withCtx(() => [
                     _createVNode(_component_v_col, {
@@ -316,29 +407,55 @@ return (_ctx, _cache) => {
                           readonly: ""
                         }, {
                           append: _withCtx(() => [
-                            _createVNode(_component_v_tooltip, { text: "重置API密钥" }, {
-                              activator: _withCtx(({ props }) => [
-                                _createVNode(_component_v_btn, _mergeProps(props, {
-                                  icon: "",
-                                  variant: "text",
-                                  color: "warning",
-                                  size: "small",
-                                  loading: resettingApiKey.value,
-                                  onClick: resetApiKey
-                                }), {
-                                  default: _withCtx(() => [
-                                    _createVNode(_component_v_icon, null, {
-                                      default: _withCtx(() => _cache[7] || (_cache[7] = [
-                                        _createTextVNode("mdi-key-alert")
-                                      ])),
-                                      _: 1
-                                    })
-                                  ]),
-                                  _: 2
-                                }, 1040, ["loading"])
-                              ]),
-                              _: 1
-                            })
+                            _createElementVNode("div", _hoisted_2, [
+                              _createVNode(_component_v_tooltip, { text: "复制API密钥" }, {
+                                activator: _withCtx(({ props }) => [
+                                  _createVNode(_component_v_btn, _mergeProps(props, {
+                                    icon: "",
+                                    variant: "text",
+                                    color: "info",
+                                    size: "small",
+                                    loading: copyingApiKey.value,
+                                    onClick: copyApiKey,
+                                    class: "mr-1"
+                                  }), {
+                                    default: _withCtx(() => [
+                                      _createVNode(_component_v_icon, null, {
+                                        default: _withCtx(() => _cache[7] || (_cache[7] = [
+                                          _createTextVNode("mdi-content-copy")
+                                        ])),
+                                        _: 1
+                                      })
+                                    ]),
+                                    _: 2
+                                  }, 1040, ["loading"])
+                                ]),
+                                _: 1
+                              }),
+                              _createVNode(_component_v_tooltip, { text: "重置API密钥" }, {
+                                activator: _withCtx(({ props }) => [
+                                  _createVNode(_component_v_btn, _mergeProps(props, {
+                                    icon: "",
+                                    variant: "text",
+                                    color: "warning",
+                                    size: "small",
+                                    loading: resettingApiKey.value,
+                                    onClick: resetApiKey
+                                  }), {
+                                    default: _withCtx(() => [
+                                      _createVNode(_component_v_icon, null, {
+                                        default: _withCtx(() => _cache[8] || (_cache[8] = [
+                                          _createTextVNode("mdi-key-alert")
+                                        ])),
+                                        _: 1
+                                      })
+                                    ]),
+                                    _: 2
+                                  }, 1040, ["loading"])
+                                ]),
+                                _: 1
+                              })
+                            ])
                           ]),
                           _: 1
                         }, 8, ["modelValue", "append-inner-icon", "type"])
@@ -358,10 +475,22 @@ return (_ctx, _cache) => {
           default: _withCtx(() => [
             _createVNode(_component_v_btn, {
               color: "secondary",
-              onClick: resetForm
+              onClick: resetForm,
+              variant: "text"
             }, {
-              default: _withCtx(() => _cache[10] || (_cache[10] = [
+              default: _withCtx(() => _cache[11] || (_cache[11] = [
                 _createTextVNode("重置")
+              ])),
+              _: 1
+            }),
+            _createVNode(_component_v_btn, {
+              color: "info",
+              onClick: notifySwitch,
+              "prepend-icon": "mdi-arrow-left",
+              variant: "text"
+            }, {
+              default: _withCtx(() => _cache[12] || (_cache[12] = [
+                _createTextVNode("返回服务器状态")
               ])),
               _: 1
             }),
@@ -372,7 +501,7 @@ return (_ctx, _cache) => {
               onClick: saveConfig,
               loading: saving.value
             }, {
-              default: _withCtx(() => _cache[11] || (_cache[11] = [
+              default: _withCtx(() => _cache[13] || (_cache[13] = [
                 _createTextVNode("保存配置")
               ])),
               _: 1
@@ -388,5 +517,6 @@ return (_ctx, _cache) => {
 }
 
 };
+const ConfigComponent = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-9e188a16"]]);
 
-export { _sfc_main as default };
+export { ConfigComponent as default };

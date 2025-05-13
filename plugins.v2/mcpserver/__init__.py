@@ -31,7 +31,7 @@ class MCPServer(_PluginBase):
     # 插件图标
     plugin_icon = "mcp.png"
     # 插件版本
-    plugin_version = "1.5"
+    plugin_version = "1.6"
     # 插件作者
     plugin_author = "DzAvril"
     # 作者主页
@@ -39,7 +39,7 @@ class MCPServer(_PluginBase):
     # 插件配置项ID前缀
     plugin_config_prefix = "mcpserver_"
     # 加载顺序
-    plugin_order = 50
+    plugin_order = 0
     # 可使用的用户级别
     auth_level = 1
 
@@ -321,7 +321,7 @@ class MCPServer(_PluginBase):
         except socket.error as e:
             logger.warning(f"端口 {port}（{host}）已被占用，尝试处理: {e}")
             s.close()
-        
+
         # 检查端口是否被占用
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
@@ -696,32 +696,243 @@ class MCPServer(_PluginBase):
             "requires_auth": True
         }
 
+        # 检查进程状态
+        process_running = False
         if self._server_process and self._server_process.poll() is None:
+            process_running = True
             status["running"] = True
             status["pid"] = self._server_process.pid
-            host = self._config['host']
-            port = self._config['port']
-            status["url"] = f"http://{host}:{port}/mcp"
+            logger.info(f"内部进程引用检查: 服务器进程正在运行，PID: {self._server_process.pid}")
 
-            # 尝试进行健康检查
+        # 如果内部进程引用不存在或无效，尝试通过psutil查找进程
+        if not process_running:
             try:
-                # 在请求中加入token
-                headers = {}
-                auth_token = self._config.get("auth_token")
-                if auth_token:
-                    headers["Authorization"] = f"Bearer {auth_token}"
+                # 尝试使用psutil查找进程
+                import psutil
+                port = int(self._config["port"])
+                logger.info(f"尝试通过psutil查找占用端口 {port} 的进程")
 
-                response = requests.get(
-                    self._health_check_url,
-                    headers=headers,
-                    timeout=2
-                )
-                # MCP端点通常返回404或406
-                status["health"] = response.status_code in [404, 406]
-            except requests.RequestException:
-                status["health"] = False
+                for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                    try:
+                        # 检查是否是Python进程
+                        if "python" not in proc.name().lower() and "python" not in " ".join(proc.cmdline() or []).lower():
+                            continue
 
+                        # 检查是否是server.py进程
+                        cmd_line = " ".join(proc.cmdline() or [])
+                        if "server.py" in cmd_line and f"--port {port}" in cmd_line:
+                            pid = proc.pid
+                            status["running"] = True
+                            status["pid"] = pid
+                            process_running = True
+                            logger.info(f"通过psutil找到服务器进程，PID: {pid}")
+                            break
+                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                        continue
+
+                # 如果没有通过进程名找到，尝试通过端口查找
+                if not process_running:
+                    try:
+                        # 获取所有网络连接
+                        connections = psutil.net_connections(kind='inet')
+
+                        # 查找占用指定端口的连接
+                        for conn in connections:
+                            if (hasattr(conn, 'laddr') and
+                                conn.laddr.port == port and
+                                conn.status == 'LISTEN' and
+                                conn.pid):
+
+                                try:
+                                    proc = psutil.Process(conn.pid)
+                                    pid = proc.pid
+                                    cmd_line = " ".join(proc.cmdline() or [])
+
+                                    # 判断是否为MCP服务器进程
+                                    if "python" in cmd_line.lower() and "server.py" in cmd_line:
+                                        status["running"] = True
+                                        status["pid"] = pid
+                                        process_running = True
+                                        logger.info(f"通过端口 {port} 找到服务器进程，PID: {pid}")
+                                        break
+                                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                                    continue
+                    except Exception as net_err:
+                        logger.error(f"通过网络连接查找进程失败: {net_err}")
+            except ImportError:
+                logger.warning("psutil模块未安装，尝试使用ps命令查找进程")
+                try:
+                    # 尝试使用ps命令查找server.py进程
+                    logger.info("通过ps命令查找server.py进程")
+                    import subprocess
+
+                    # 构建查找命令 - 查找包含server.py和端口号的进程
+                    port = self._config["port"]
+                    cmd = f"ps -ef | grep 'server.py.*--port {port}' | grep -v grep"
+
+                    # 执行命令
+                    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                    output = result.stdout.strip()
+
+                    if output:
+                        logger.info(f"找到server.py进程: {output}")
+                        # 解析PID
+                        parts = output.split()
+                        if len(parts) > 1:
+                            try:
+                                pid = int(parts[1])
+                                status["running"] = True
+                                status["pid"] = pid
+                                process_running = True
+                                logger.info(f"通过ps命令确认服务器正在运行，PID: {pid}")
+                            except (ValueError, IndexError) as e:
+                                logger.error(f"解析PID失败: {e}")
+                    else:
+                        logger.info("未找到server.py进程")
+                except Exception as e:
+                    logger.error(f"使用ps命令查找进程失败: {e}")
+                    logger.error(traceback.format_exc())
+            except Exception as e:
+                logger.error(f"使用psutil查找进程失败: {e}")
+                logger.error(traceback.format_exc())
+
+        # 设置服务URL
+        host = self._config['host']
+        port = self._config['port']
+        status["url"] = f"http://{host}:{port}/mcp"
+
+        # 尝试通过端口检查服务是否运行
+        if not process_running:
+            try:
+                # 创建一个socket连接测试端口是否被占用
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(1)
+                result = s.connect_ex(('localhost', port))
+                s.close()
+
+                # 如果端口被占用，可能服务器正在运行
+                if result == 0:
+                    logger.info(f"端口 {port} 被占用，服务可能正在运行")
+                    status["running"] = True
+                    process_running = True
+            except Exception as socket_err:
+                logger.error(f"端口检查失败: {str(socket_err)}")
+
+        # 尝试进行健康检查
+        try:
+            # 在请求中加入token
+            headers = {}
+            auth_token = self._config.get("auth_token")
+            if auth_token:
+                headers["Authorization"] = f"Bearer {auth_token}"
+
+            # 增加超时时间，避免网络波动导致误判
+            response = requests.get(
+                self._health_check_url,
+                headers=headers,
+                timeout=3
+            )
+
+            # 记录响应状态码
+            logger.info(f"健康检查响应状态码: {response.status_code}")
+
+            # MCP端点通常返回404或406
+            health_ok = response.status_code in [404, 406]
+            status["health"] = health_ok
+
+            # 如果健康检查通过，说明服务器一定在运行
+            if health_ok:
+                status["running"] = True
+                logger.info(f"健康检查成功: 服务器运行中 (HTTP {response.status_code})")
+
+                # 如果进程引用丢失，尝试恢复
+                if not process_running:
+                    logger.warning("检测到服务器正在运行，但进程引用已丢失，尝试恢复...")
+                    # 尝试查找并恢复进程引用
+                    self._try_recover_process_reference(port)
+            else:
+                # 健康检查失败但返回了响应，可能是服务器正在启动或有其他问题
+                logger.warning(f"健康检查返回非预期状态码: {response.status_code}")
+
+                # 如果进程正在运行，我们仍然认为服务器是运行的
+                if process_running:
+                    status["running"] = True
+                    logger.info("虽然健康检查未通过，但进程正在运行，标记为运行状态")
+        except requests.RequestException as e:
+            logger.debug(f"健康检查请求失败: {str(e)}")
+            status["health"] = False
+
+            # 如果进程正在运行，我们仍然认为服务器是运行的
+            if process_running:
+                status["running"] = True
+                logger.info("虽然健康检查请求失败，但进程正在运行，标记为运行状态")
+
+        # 最终状态日志
+        logger.info(
+            "最终服务器状态: running=%s, health=%s, pid=%s",
+            status['running'], status['health'], status['pid']
+        )
         return status
+
+    def _try_recover_process_reference(self, port: int) -> bool:
+        """尝试恢复进程引用"""
+        try:
+            # 尝试导入psutil
+            import psutil
+            logger.info(f"尝试恢复端口 {port} 的进程引用")
+
+            # 获取所有网络连接
+            connections = psutil.net_connections(kind='inet')
+
+            # 查找占用指定端口的连接
+            target_conns = [
+                conn for conn in connections
+                if (hasattr(conn, 'laddr') and
+                    conn.laddr.port == port and
+                    conn.status == 'LISTEN')
+            ]
+
+            if not target_conns:
+                logger.info(f"未找到占用端口 {port} 的连接")
+                return False
+
+            # 查找对应的进程
+            for conn in target_conns:
+                if not conn.pid:
+                    continue
+
+                try:
+                    proc = psutil.Process(conn.pid)
+                    pid = proc.pid
+                    logger.info(f"找到占用端口的进程 PID: {pid}")
+
+                    # 检查是否为Python进程和MCP服务器
+                    cmd_line = " ".join(proc.cmdline() or [])
+                    logger.info(f"进程命令行: {cmd_line}")
+
+                    # 判断是否为MCP服务器进程
+                    is_python = "python" in cmd_line.lower()
+                    is_server = "server.py" in cmd_line
+
+                    if is_python and is_server:
+                        logger.info(f"确认为MCP服务器进程: PID={pid}")
+                        # 这里不能直接恢复进程引用，因为需要subprocess.Popen对象
+                        # 但我们可以记录这个信息，供后续使用
+                        return True
+                except (psutil.NoSuchProcess,
+                         psutil.AccessDenied,
+                         psutil.ZombieProcess):
+                    continue
+
+            logger.info("未找到符合条件的MCP服务器进程")
+            return False
+        except ImportError:
+            logger.warning("psutil模块未安装，无法恢复进程引用")
+            return False
+        except Exception as e:
+            logger.error(f"恢复进程引用时出错: {str(e)}")
+            logger.error(traceback.format_exc())
+            return False
 
     def _mask_token(self, token: str) -> str:
         """掩盖token，只显示前4位和后4位"""
@@ -768,9 +979,12 @@ class MCPServer(_PluginBase):
 
     def get_state(self) -> bool:
         """获取服务器状态"""
-        # 如果进程存在且正在运行，返回True
-        if self._server_process and self._server_process.poll() is None:
+        # 使用_get_server_status方法获取完整状态，保持一致性
+        status = self._get_server_status()
+        # 如果服务器正在运行，返回True
+        if status["running"]:
             return True
+        # 否则返回插件启用状态
         return self._enable
 
     # --- Instance methods for API endpoints ---
@@ -822,13 +1036,32 @@ class MCPServer(_PluginBase):
     def _restart_server(self) -> Dict[str, Any]:
         """API Endpoint: 重启服务器"""
         try:
+            logger.info("正在执行服务器重启...")
             self._stop_server()
-            time.sleep(1)  # 等待端口释放
+            time.sleep(2)  # 增加等待时间，确保端口完全释放
+
+            # 启动服务器
             self._start_server()
-            return {
-                "message": "服务器已重启",
-                "server_status": self._get_server_status()
-            }
+
+            # 等待服务器完全启动
+            time.sleep(3)
+
+            # 获取最新状态
+            current_status = self._get_server_status()
+
+            # 记录重启结果
+            if current_status["running"]:
+                logger.info(f"服务器已成功重启，PID: {current_status['pid']}")
+                return {
+                    "message": "服务器已成功重启",
+                    "server_status": current_status
+                }
+            else:
+                logger.warning("服务器重启后状态检查失败，可能需要手动刷新状态")
+                return {
+                    "message": "服务器已重启，但状态检查未通过，请手动刷新状态",
+                    "server_status": current_status
+                }
         except Exception as e:
             logger.error(f"重启服务器失败: {str(e)}")
             logger.error(traceback.format_exc())
@@ -877,8 +1110,45 @@ class MCPServer(_PluginBase):
                 "methods": ["POST"],
                 "auth": "bear",
                 "summary": "生成新的API令牌"
+            },
+            {
+                "path": "/status",
+                "endpoint": self._get_server_status_api,
+                "methods": ["GET"],
+                "auth": "bear",
+                "summary": "获取服务器状态"
             }
         ]
+
+    def _get_server_status_api(self) -> Dict[str, Any]:
+        """API Endpoint: 获取服务器状态"""
+        try:
+            # 获取最新的服务器状态
+            status = self._get_server_status()
+
+            # 记录日志
+            logger.info(
+                "获取服务器状态: running=%s, health=%s",
+                status['running'], status['health']
+            )
+
+            return {
+                "server_status": status,
+                "message": "获取服务器状态成功"
+            }
+        except Exception as e:
+            logger.error(f"获取服务器状态失败: {str(e)}")
+            logger.error(traceback.format_exc())
+            return {
+                "message": f"获取服务器状态失败: {str(e)}",
+                "error": True,
+                "server_status": {
+                    "running": False,
+                    "health": False,
+                    "pid": None,
+                    "url": None
+                }
+            }
 
     # --- V2 Vue Interface Method ---
     @staticmethod
@@ -906,7 +1176,7 @@ class MCPServer(_PluginBase):
         ]
 
     def get_dashboard(
-        self, key: str, **kwargs
+        self, key: str, **_
     ) -> Optional[Tuple[Dict[str, Any], Dict[str, Any], Optional[List[dict]]]]:
         """获取插件仪表盘页面"""
         return {

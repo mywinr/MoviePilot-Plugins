@@ -1,7 +1,8 @@
 import { importShared } from './__federation_fn_import-JrT3xvdd.js';
-import _sfc_main$1 from './__federation_expose_Page-Dt-TGqq6.js';
-import _sfc_main$2 from './__federation_expose_Config-B5DVxpZT.js';
-import _sfc_main$3 from './__federation_expose_Dashboard-BkyO-3pr.js';
+import PageComponent from './__federation_expose_Page-Ds7t5Ok7.js';
+import ConfigComponent from './__federation_expose_Config-ByJ1CoAs.js';
+import _sfc_main$1 from './__federation_expose_Dashboard-BkyO-3pr.js';
+import { _ as _export_sfc } from './_plugin-vue_export-helper-pcqpp-6-.js';
 import { p as propsFactory, i as includes, a as isOn, e as eventName, g as genericComponent, b as getCurrentInstance, c as provideTheme, d as createLayout, u as useRtl, m as makeThemeProps, f as makeLayoutProps, h as provideDefaults, j as convertToUnit, k as destructComputed, l as isCssColor, n as isParsableColor, o as parseColor, q as getForeground, r as getCurrentInstanceName, S as SUPPORTS_INTERSECTION, s as clamp, t as consoleWarn, v as useProxiedModel, w as useToggleScope, x as useLayoutItem, y as makeLayoutItemProps, z as getUid, A as deepEqual, B as wrapInArray, C as findChildrenWithProvide, D as useIcon, I as IconValue, E as flattenFragments, F as useResizeObserver, G as IN_BROWSER, H as hasEvent, J as isObject, K as keyCodes, L as useLocale, M as EventProp, N as filterInputAttrs, O as matchesSelector, P as omit, Q as only, R as useDisplay, T as useGoTo, U as makeDisplayProps, V as focusableChildren, W as consoleError, X as defineComponent, Y as deprecate, Z as getPropertyFromItem, _ as focusChild, $ as defer, a0 as templateRef, a1 as isClickInsideElement, a2 as getNextElement, a3 as pick, a4 as callEvent, a5 as debounce, a6 as ensureValidVNode, a7 as checkPrintable, a8 as noop, a9 as useTheme, aa as pickWithRest, ab as keys, ac as getEventCoordinates, ad as HexToHSV, ae as HSVtoHex, af as HSLtoHSV, ag as HSVtoHSL, ah as RGBtoHSV, ai as HSVtoRGB, aj as has, ak as getDecimals, al as createRange, am as keyValues, an as SUPPORTS_EYE_DROPPER, ao as HSVtoCSS, ap as RGBtoCSS, aq as getContrast, ar as isComposingIgnoreKey, as as getObjectValueByPath, at as isEmpty, au as defineFunctionalComponent, av as breakpoints, aw as useDate, ax as getWeek, ay as humanReadableFileSize, az as provideLocale, aA as useLayout, aB as CircularBuffer, aC as VuetifyLayoutKey, aD as refElement, aE as VClassIcon, aF as VComponentIcon, aG as VLigatureIcon, aH as VSvgIcon } from './date--mM7W7--.js';
 
 true&&(function polyfill() {
@@ -41,14 +42,6 @@ true&&(function polyfill() {
     fetch(link.href, fetchOpts);
   }
 }());
-
-const _export_sfc = (sfc, props) => {
-  const target = sfc.__vccOpts || sfc;
-  for (const [key, val] of props) {
-    target[key] = val;
-  }
-  return target;
-};
 
 const {createTextVNode:_createTextVNode$7,resolveComponent:_resolveComponent,withCtx:_withCtx,createVNode:_createVNode$2h,createElementVNode:_createElementVNode,toDisplayString:_toDisplayString,openBlock:_openBlock,createElementBlock:_createElementBlock} = await importShared('vue');
 
@@ -191,7 +184,7 @@ return (_ctx, _cache) => {
                       default: _withCtx(() => [
                         _cache[9] || (_cache[9] = _createElementVNode("h2", { class: "text-h5 mb-4" }, "Page组件", -1)),
                         _createElementVNode("div", _hoisted_2, [
-                          _createVNode$2h(_sfc_main$1, { onAction: handleAction })
+                          _createVNode$2h(PageComponent, { onAction: handleAction })
                         ])
                       ]),
                       _: 1
@@ -200,7 +193,7 @@ return (_ctx, _cache) => {
                       default: _withCtx(() => [
                         _cache[10] || (_cache[10] = _createElementVNode("h2", { class: "text-h5 mb-4" }, "Config组件", -1)),
                         _createElementVNode("div", _hoisted_3, [
-                          _createVNode$2h(_sfc_main$2, {
+                          _createVNode$2h(ConfigComponent, {
                             "initial-config": initialConfig,
                             onSave: handleConfigSave
                           })
@@ -219,7 +212,7 @@ return (_ctx, _cache) => {
                           class: "mb-4"
                         }, null, 8, ["modelValue"]),
                         _createElementVNode("div", _hoisted_4, [
-                          _createVNode$2h(_sfc_main$3, {
+                          _createVNode$2h(_sfc_main$1, {
                             config: dashboardConfig,
                             "allow-refresh": true
                           }, null, 8, ["config"])
