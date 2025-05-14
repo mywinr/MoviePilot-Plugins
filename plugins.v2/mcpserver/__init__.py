@@ -27,11 +27,11 @@ class MCPServer(_PluginBase):
     # 插件名称
     plugin_name = "MCP Server"
     # 插件描述
-    plugin_desc = "启动MCP服务器实现大模型操作MoviePilot"
+    plugin_desc = "使用MCP客户端通过大模型来操作MoviePilot"
     # 插件图标
-    plugin_icon = "mcp.png"
+    plugin_icon = "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/mcp.png"
     # 插件版本
-    plugin_version = "1.6"
+    plugin_version = "1.0"
     # 插件作者
     plugin_author = "DzAvril"
     # 作者主页

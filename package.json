@@ -99,5 +99,18 @@
             "v1.1": "支持将极影视评分修改为豆瓣评分",
             "v1.0": "同步极影视在看/已看状态到豆瓣"
         }
+    },
+    "MCPServer": {
+        "name": "MCP Server",
+        "description": "使用MCP客户端通过大模型来操作MoviePilot",
+        "labels": "系统设置",
+        "version": "1.0",
+        "icon": "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/mcp.png",
+        "author": "DzAvril",
+        "level": 1,
+        "v2": true,
+        "history": {
+            "v1.0": "MCP server基础功能"
+        }
     }
 }
