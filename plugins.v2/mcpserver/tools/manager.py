@@ -4,6 +4,7 @@ import mcp.types as types
 from .base import BaseTool
 from .user.info import UserInfoTool
 from .site.sites import GetSitesTool
+from .media.subscribe import SubscribeTool
 import logging
 
 # Configure logging
@@ -22,6 +23,7 @@ class ToolManager:
         tools = [
             UserInfoTool,
             GetSitesTool,
+            SubscribeTool
         ]
         
         for tool_class in tools:
