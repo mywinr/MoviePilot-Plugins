@@ -6,7 +6,7 @@ const {resolveComponent:_resolveComponent,createVNode:_createVNode,createElement
 
 const _hoisted_1 = { class: "plugin-page" };
 const _hoisted_2 = {
-  key: 3,
+  key: 4,
   class: "my-1"
 };
 const _hoisted_3 = { class: "text-caption" };
@@ -39,8 +39,13 @@ const loading = ref(false);
 const error = ref(null);
 const initialDataLoaded = ref(false);
 const restarting = ref(false);
+const starting = ref(false);
+const stopping = ref(false);
 const actionMessage = ref(null);
 const actionMessageType = ref('info');
+
+// 插件启用状态
+const pluginEnabled = ref(true);
 
 // 服务器状态
 const serverStatus = reactive({
@@ -72,10 +77,19 @@ async function fetchServerStatus() {
     const statusData = await props.api.get(`plugin/${pluginId}/status`);
     console.log('直接获取的状态数据:', statusData);
 
-    if (statusData && statusData.server_status) {
-      Object.assign(serverStatus, statusData.server_status);
+    if (statusData) {
+      // 更新服务器状态
+      if (statusData.server_status) {
+        Object.assign(serverStatus, statusData.server_status);
+      }
+
+      // 更新插件启用状态
+      if ('enable' in statusData) {
+        pluginEnabled.value = statusData.enable;
+      }
+
       initialDataLoaded.value = true;
-      actionMessage.value = '已通过备用方法获取服务器状态';
+      actionMessage.value = '已获取服务器状态';
       actionMessageType.value = 'success';
       setTimeout(() => { actionMessage.value = null; }, 3000);
     }
@@ -83,6 +97,107 @@ async function fetchServerStatus() {
     error.value = err.message || '获取服务器状态失败，请检查网络或API';
   } finally {
     loading.value = false;
+  }
+}
+
+// 启动服务器
+async function startServer() {
+  starting.value = true;
+  error.value = null;
+  actionMessage.value = null;
+
+  const pluginId = getPluginId();
+
+  try {
+    // 调用启动API
+    const data = await props.api.post(`plugin/${pluginId}/start`);
+
+    if (data) {
+      if (data.error) {
+        throw new Error(data.message || '启动服务器时发生错误')
+      }
+
+      // 更新服务器状态
+      if (data.server_status) {
+        Object.assign(serverStatus, data.server_status);
+      }
+
+      actionMessage.value = data.message || '服务器已启动';
+      actionMessageType.value = 'success';
+
+      // 设置多次刷新状态的定时器，确保能获取到最新状态
+      // 第一次刷新 - 3秒后
+      setTimeout(() => {
+        fetchServerStatus();
+
+        // 第二次刷新 - 8秒后
+        setTimeout(() => {
+          fetchServerStatus();
+
+          // 第三次刷新 - 15秒后（如果状态仍然是停止）
+          if (!serverStatus.running) {
+            setTimeout(() => fetchServerStatus(), 7000);
+          }
+        }, 5000);
+      }, 3000);
+    } else {
+      throw new Error('启动服务器响应无效或为空')
+    }
+  } catch (err) {
+    console.error('启动服务器失败:', err);
+    error.value = err.message || '启动服务器失败';
+    actionMessageType.value = 'error';
+  } finally {
+    starting.value = false;
+    setTimeout(() => { actionMessage.value = null; }, 8000);
+  }
+}
+
+// 停止服务器
+async function stopServer() {
+  stopping.value = true;
+  error.value = null;
+  actionMessage.value = null;
+
+  const pluginId = getPluginId();
+
+  try {
+    // 调用停止API
+    const data = await props.api.post(`plugin/${pluginId}/stop`);
+
+    if (data) {
+      if (data.error) {
+        throw new Error(data.message || '停止服务器时发生错误')
+      }
+
+      // 更新服务器状态
+      if (data.server_status) {
+        Object.assign(serverStatus, data.server_status);
+      }
+
+      actionMessage.value = data.message || '服务器已停止';
+      actionMessageType.value = 'success';
+
+      // 设置多次刷新状态的定时器，确保能获取到最新状态
+      // 第一次刷新 - 2秒后
+      setTimeout(() => {
+        fetchServerStatus();
+
+        // 第二次刷新 - 5秒后
+        setTimeout(() => {
+          fetchServerStatus();
+        }, 3000);
+      }, 2000);
+    } else {
+      throw new Error('停止服务器响应无效或为空')
+    }
+  } catch (err) {
+    console.error('停止服务器失败:', err);
+    error.value = err.message || '停止服务器失败';
+    actionMessageType.value = 'error';
+  } finally {
+    stopping.value = false;
+    setTimeout(() => { actionMessage.value = null; }, 8000);
   }
 }
 
@@ -111,21 +226,24 @@ async function restartServer() {
       actionMessage.value = data.message || '服务器已重启';
       actionMessageType.value = 'success';
 
-      // 设置多次刷新状态的定时器，确保能获取到最新状态
-      // 第一次刷新 - 3秒后
-      setTimeout(() => {
-        fetchServerStatus();
-
-        // 第二次刷新 - 8秒后
+      // 如果服务器已停止，提示用户手动启动
+      if (!serverStatus.running) {
+        setTimeout(() => {
+          actionMessage.value = '服务器已停止，请手动启动';
+          actionMessageType.value = 'info';
+        }, 3000);
+      } else {
+        // 设置多次刷新状态的定时器，确保能获取到最新状态
+        // 第一次刷新 - 3秒后
         setTimeout(() => {
           fetchServerStatus();
 
-          // 第三次刷新 - 15秒后（如果状态仍然是停止）
-          if (!serverStatus.running) {
-            setTimeout(() => fetchServerStatus(), 7000);
-          }
-        }, 5000);
-      }, 3000);
+          // 第二次刷新 - 8秒后
+          setTimeout(() => {
+            fetchServerStatus();
+          }, 5000);
+        }, 3000);
+      }
     } else {
       throw new Error('重启服务器响应无效或为空')
     }
@@ -220,9 +338,23 @@ return (_ctx, _cache) => {
                   _: 1
                 }, 8, ["type"]))
               : _createCommentVNode("", true),
+            (initialDataLoaded.value && !pluginEnabled.value)
+              ? (_openBlock(), _createBlock(_component_v_alert, {
+                  key: 2,
+                  type: "warning",
+                  density: "compact",
+                  class: "mb-2 text-caption",
+                  variant: "tonal"
+                }, {
+                  default: _withCtx(() => _cache[1] || (_cache[1] = [
+                    _createTextVNode(" 插件当前已禁用，服务器操作按钮不可用。请在配置页面启用插件后再操作。 ")
+                  ])),
+                  _: 1
+                }))
+              : _createCommentVNode("", true),
             (loading.value && !initialDataLoaded.value)
               ? (_openBlock(), _createBlock(_component_v_skeleton_loader, {
-                  key: 2,
+                  key: 3,
                   type: "article, actions"
                 }))
               : _createCommentVNode("", true),
@@ -241,7 +373,7 @@ return (_ctx, _cache) => {
                             color: "primary",
                             size: "small"
                           }),
-                          _cache[1] || (_cache[1] = _createElementVNode("span", null, "服务器状态", -1))
+                          _cache[2] || (_cache[2] = _createElementVNode("span", null, "服务器状态", -1))
                         ]),
                         _: 1
                       }),
@@ -271,7 +403,7 @@ return (_ctx, _cache) => {
                                 ]),
                                 default: _withCtx(() => [
                                   _createVNode(_component_v_list_item_title, { class: "text-caption" }, {
-                                    default: _withCtx(() => _cache[2] || (_cache[2] = [
+                                    default: _withCtx(() => _cache[3] || (_cache[3] = [
                                       _createTextVNode("运行状态")
                                     ])),
                                     _: 1
@@ -293,7 +425,7 @@ return (_ctx, _cache) => {
                                 ]),
                                 default: _withCtx(() => [
                                   _createVNode(_component_v_list_item_title, { class: "text-caption" }, {
-                                    default: _withCtx(() => _cache[3] || (_cache[3] = [
+                                    default: _withCtx(() => _cache[4] || (_cache[4] = [
                                       _createTextVNode("进程 ID")
                                     ])),
                                     _: 1
@@ -324,7 +456,7 @@ return (_ctx, _cache) => {
                                 ]),
                                 default: _withCtx(() => [
                                   _createVNode(_component_v_list_item_title, { class: "text-caption" }, {
-                                    default: _withCtx(() => _cache[4] || (_cache[4] = [
+                                    default: _withCtx(() => _cache[5] || (_cache[5] = [
                                       _createTextVNode("健康状态")
                                     ])),
                                     _: 1
@@ -346,7 +478,7 @@ return (_ctx, _cache) => {
                                 ]),
                                 default: _withCtx(() => [
                                   _createVNode(_component_v_list_item_title, { class: "text-caption" }, {
-                                    default: _withCtx(() => _cache[5] || (_cache[5] = [
+                                    default: _withCtx(() => _cache[6] || (_cache[6] = [
                                       _createTextVNode("服务地址")
                                     ])),
                                     _: 1
@@ -378,7 +510,7 @@ return (_ctx, _cache) => {
               variant: "text",
               size: "small"
             }, {
-              default: _withCtx(() => _cache[6] || (_cache[6] = [
+              default: _withCtx(() => _cache[7] || (_cache[7] = [
                 _createTextVNode("配置")
               ])),
               _: 1
@@ -392,24 +524,62 @@ return (_ctx, _cache) => {
               variant: "text",
               size: "small"
             }, {
-              default: _withCtx(() => _cache[7] || (_cache[7] = [
-                _createTextVNode("刷新状态")
+              default: _withCtx(() => _cache[8] || (_cache[8] = [
+                _createTextVNode(" 刷新状态 ")
               ])),
               _: 1
             }, 8, ["loading"]),
-            _createVNode(_component_v_btn, {
-              color: "success",
-              onClick: restartServer,
-              loading: restarting.value,
-              "prepend-icon": "mdi-restart",
-              variant: "text",
-              size: "small"
-            }, {
-              default: _withCtx(() => [
-                _createTextVNode(_toDisplayString(serverStatus.running ? '重启服务器' : '启动服务器'), 1)
-              ]),
-              _: 1
-            }, 8, ["loading"]),
+            (!serverStatus.running)
+              ? (_openBlock(), _createBlock(_component_v_btn, {
+                  key: 0,
+                  color: "success",
+                  onClick: startServer,
+                  loading: starting.value,
+                  "prepend-icon": "mdi-play",
+                  variant: "text",
+                  size: "small",
+                  disabled: !pluginEnabled.value
+                }, {
+                  default: _withCtx(() => _cache[9] || (_cache[9] = [
+                    _createTextVNode(" 启动服务器 ")
+                  ])),
+                  _: 1
+                }, 8, ["loading", "disabled"]))
+              : _createCommentVNode("", true),
+            (serverStatus.running)
+              ? (_openBlock(), _createBlock(_component_v_btn, {
+                  key: 1,
+                  color: "warning",
+                  onClick: stopServer,
+                  loading: stopping.value,
+                  "prepend-icon": "mdi-stop",
+                  variant: "text",
+                  size: "small",
+                  disabled: !pluginEnabled.value
+                }, {
+                  default: _withCtx(() => _cache[10] || (_cache[10] = [
+                    _createTextVNode(" 停止服务器 ")
+                  ])),
+                  _: 1
+                }, 8, ["loading", "disabled"]))
+              : _createCommentVNode("", true),
+            (serverStatus.running)
+              ? (_openBlock(), _createBlock(_component_v_btn, {
+                  key: 2,
+                  color: "success",
+                  onClick: restartServer,
+                  loading: restarting.value,
+                  "prepend-icon": "mdi-restart",
+                  variant: "text",
+                  size: "small",
+                  disabled: !pluginEnabled.value
+                }, {
+                  default: _withCtx(() => _cache[11] || (_cache[11] = [
+                    _createTextVNode(" 重启服务器 ")
+                  ])),
+                  _: 1
+                }, 8, ["loading", "disabled"]))
+              : _createCommentVNode("", true),
             _createVNode(_component_v_btn, {
               color: "grey",
               onClick: notifyClose,
@@ -417,7 +587,7 @@ return (_ctx, _cache) => {
               variant: "text",
               size: "small"
             }, {
-              default: _withCtx(() => _cache[8] || (_cache[8] = [
+              default: _withCtx(() => _cache[12] || (_cache[12] = [
                 _createTextVNode("关闭")
               ])),
               _: 1
@@ -433,6 +603,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const PageComponent = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-4cd3c39a"]]);
+const PageComponent = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-73ec574d"]]);
 
 export { PageComponent as default };

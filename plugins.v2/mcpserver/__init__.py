@@ -8,13 +8,13 @@ import threading
 import socket
 import secrets
 import string
+import json
 from typing import List, Tuple, Dict, Any, Optional
 from pathlib import Path
 
 from app.log import logger
 from app.plugins import _PluginBase
-
-# 生成随机token函数
+from app.core.config import settings
 
 
 def generate_token(length=32):
@@ -93,7 +93,9 @@ class MCPServer(_PluginBase):
         self._health_check_url = f"http://localhost:{port}/mcp"
 
         if not self._enable:
+            # 如果插件被禁用，停止服务器
             self._stop_server()
+            logger.info("插件已禁用，服务器已停止")
             return
 
         # 确保虚拟环境存在
@@ -102,7 +104,25 @@ class MCPServer(_PluginBase):
             self._enable = False
             return
 
-        self._start_server()
+        # 检查用户名和密码是否已配置
+        username = self._config.get("mp_username", "")
+        password = self._config.get("mp_password", "")
+
+        if not username or not password:
+            logger.error("未配置 MoviePilot 用户名或密码，无法启动服务器")
+            logger.info("插件已启用，但服务器未启动，请在配置页面填写用户名和密码")
+            return
+
+        # 尝试获取 access_token
+        access_token = self._get_moviepilot_access_token()
+        if not access_token:
+            logger.error("无法获取 MoviePilot 的 access token，无法启动服务器")
+            logger.info("插件已启用，但服务器未启动，请检查用户名和密码是否正确")
+            return
+
+        # 保存 access_token 到配置
+        self._config["access_token"] = access_token
+        logger.info("已获取 MoviePilot 的 access token，将用于 API 请求")
 
     def _ensure_venv(self) -> bool:
         """确保虚拟环境存在并安装了所需依赖"""
@@ -212,6 +232,9 @@ class MCPServer(_PluginBase):
 
             logger.info("API认证已启用，需要Bearer Token才能访问")
 
+            # 获取已保存的 access_token
+            access_token = self._config.get("access_token", "")
+
             # 构建启动命令
             cmd = [
                 str(self._python_bin),
@@ -224,6 +247,9 @@ class MCPServer(_PluginBase):
             # 添加认证参数
             if auth_token:
                 cmd.extend(["--auth-token", auth_token])
+
+            if access_token:
+                cmd.extend(["--access-token", access_token])
 
             logger.info(f"启动命令: {' '.join(cmd)}")
 
@@ -304,7 +330,8 @@ class MCPServer(_PluginBase):
         # 判断地址类型：IPv4 or IPv6
         try:
             # getaddrinfo 自动判断协议族
-            addr_info = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+            addr_info = socket.getaddrinfo(
+                host, port, proto=socket.IPPROTO_TCP)
         except socket.gaierror as e:
             logger.error(f"地址解析失败: {host}, error: {e}")
             return
@@ -741,7 +768,7 @@ class MCPServer(_PluginBase):
                             if (hasattr(conn, 'laddr') and
                                 conn.laddr.port == port and
                                 conn.status == 'LISTEN' and
-                                conn.pid):
+                                    conn.pid):
 
                                 try:
                                     proc = psutil.Process(conn.pid)
@@ -753,7 +780,8 @@ class MCPServer(_PluginBase):
                                         status["running"] = True
                                         status["pid"] = pid
                                         process_running = True
-                                        logger.info(f"通过端口 {port} 找到服务器进程，PID: {pid}")
+                                        logger.info(
+                                            f"通过端口 {port} 找到服务器进程，PID: {pid}")
                                         break
                                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                                     continue
@@ -771,7 +799,8 @@ class MCPServer(_PluginBase):
                     cmd = f"ps -ef | grep 'server.py.*--port {port}' | grep -v grep"
 
                     # 执行命令
-                    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                    result = subprocess.run(
+                        cmd, shell=True, capture_output=True, text=True)
                     output = result.stdout.strip()
 
                     if output:
@@ -920,8 +949,8 @@ class MCPServer(_PluginBase):
                         # 但我们可以记录这个信息，供后续使用
                         return True
                 except (psutil.NoSuchProcess,
-                         psutil.AccessDenied,
-                         psutil.ZombieProcess):
+                        psutil.AccessDenied,
+                        psutil.ZombieProcess):
                     continue
 
             logger.info("未找到符合条件的MCP服务器进程")
@@ -1000,24 +1029,78 @@ class MCPServer(_PluginBase):
         """API Endpoint: Saves plugin configuration. Expects a dict payload."""
         logger.info(f"{self.plugin_name}: 收到配置保存请求: {config_payload}")
         try:
+            # 保存当前启用状态，用于检测变化
+            previous_enable = self._enable
+
             # 更新配置
-            self._enable = config_payload.get('enable', self._enable)
+            new_enable = config_payload.get('enable', self._enable)
             if 'config' in config_payload:
                 self._config.update(config_payload['config'])
 
             # 准备保存的配置
             config_to_save = {
-                "enable": self._enable,
+                "enable": new_enable,
                 "config": self._config
             }
 
             # 保存配置
             self.update_config(config_to_save)
 
-            # 重新初始化插件
-            self.init_plugin(self.get_config())
+            # 检测启用状态变化
+            enable_changed = previous_enable != new_enable
+            self._enable = new_enable
 
-            logger.info(f"{self.plugin_name}: 配置已保存并重新初始化")
+            # 根据启用状态变化处理服务器进程
+            if enable_changed:
+                if new_enable:
+                    # 从禁用变为启用，尝试启动服务器
+                    logger.info("插件从禁用变为启用，尝试启动服务器")
+
+                    # 检查用户名和密码是否已配置
+                    username = self._config.get("mp_username", "")
+                    password = self._config.get("mp_password", "")
+
+                    if not username or not password:
+                        logger.error("未配置 MoviePilot 用户名或密码，无法启动服务器")
+                        return {
+                            "message": "配置已保存，但未配置 MoviePilot 用户名或密码，无法启动服务器",
+                            "saved_config": self._get_config()
+                        }
+
+                    # 尝试获取 access_token
+                    access_token = self._get_moviepilot_access_token()
+                    if not access_token:
+                        logger.error("无法获取 MoviePilot 的 access token，无法启动服务器")
+                        return {
+                            "message": "配置已保存，但无法获取 MoviePilot 的 access token，无法启动服务器",
+                            "saved_config": self._get_config()
+                        }
+
+                    # 保存 access_token 到配置
+                    self._config["access_token"] = access_token
+                    logger.info("已获取 MoviePilot 的 access token，将用于 API 请求")
+
+                    # 启动服务器
+                    self._start_server()
+                    logger.info("服务器已启动")
+
+                    return {
+                        "message": "配置已保存，服务器已启动",
+                        "saved_config": self._get_config()
+                    }
+                else:
+                    # 从启用变为禁用，停止服务器
+                    logger.info("插件从启用变为禁用，停止服务器")
+                    self._stop_server()
+                    logger.info("服务器已停止")
+
+                    return {
+                        "message": "配置已保存，服务器已停止",
+                        "saved_config": self._get_config()
+                    }
+
+            # 如果启用状态没有变化，只返回保存成功的消息
+            logger.info(f"{self.plugin_name}: 配置已保存")
 
             # 返回最终状态
             return {
@@ -1040,28 +1123,11 @@ class MCPServer(_PluginBase):
             self._stop_server()
             time.sleep(2)  # 增加等待时间，确保端口完全释放
 
-            # 启动服务器
-            self._start_server()
-
-            # 等待服务器完全启动
-            time.sleep(3)
-
-            # 获取最新状态
-            current_status = self._get_server_status()
-
-            # 记录重启结果
-            if current_status["running"]:
-                logger.info(f"服务器已成功重启，PID: {current_status['pid']}")
-                return {
-                    "message": "服务器已成功重启",
-                    "server_status": current_status
-                }
-            else:
-                logger.warning("服务器重启后状态检查失败，可能需要手动刷新状态")
-                return {
-                    "message": "服务器已重启，但状态检查未通过，请手动刷新状态",
-                    "server_status": current_status
-                }
+            # 返回服务器已停止的状态，由前端决定是否重新启动
+            return {
+                "message": "服务器已停止，请手动启动",
+                "server_status": self._get_server_status()
+            }
         except Exception as e:
             logger.error(f"重启服务器失败: {str(e)}")
             logger.error(traceback.format_exc())
@@ -1105,6 +1171,20 @@ class MCPServer(_PluginBase):
                 "summary": "重启服务器"
             },
             {
+                "path": "/start",
+                "endpoint": self._start_server_api,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "启动服务器"
+            },
+            {
+                "path": "/stop",
+                "endpoint": self._stop_server_api,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "停止服务器"
+            },
+            {
                 "path": "/token",
                 "endpoint": self._generate_new_token,
                 "methods": ["POST"],
@@ -1120,6 +1200,118 @@ class MCPServer(_PluginBase):
             }
         ]
 
+    def _start_server_api(self) -> Dict[str, Any]:
+        """API Endpoint: 启动服务器"""
+        try:
+            # 检查服务器是否已经在运行
+            status = self._get_server_status()
+            if status["running"]:
+                return {
+                    "message": "服务器已经在运行中",
+                    "server_status": status
+                }
+
+            # 检查用户名和密码是否已配置
+            username = self._config.get("mp_username", "")
+            password = self._config.get("mp_password", "")
+
+            if not username or not password:
+                logger.error("未配置 MoviePilot 用户名或密码，无法启动服务器")
+                logger.error("请在插件配置页面填写 MoviePilot 用户名和密码")
+                return {
+                    "message": "未配置 MoviePilot 用户名或密码，无法启动服务器",
+                    "error": True,
+                    "server_status": self._get_server_status()
+                }
+
+            # 尝试获取 access_token
+            access_token = self._get_moviepilot_access_token()
+            if not access_token:
+                logger.error("无法获取 MoviePilot 的 access token，无法启动服务器")
+                logger.error("请检查 MoviePilot 用户名和密码是否正确")
+                return {
+                    "message": "无法获取 MoviePilot 的 access token，无法启动服务器",
+                    "error": True,
+                    "server_status": self._get_server_status()
+                }
+
+            # 保存 access_token 到配置
+            self._config["access_token"] = access_token
+            logger.info("已获取 MoviePilot 的 access token，将用于 API 请求")
+
+            # 启动服务器
+            self._start_server()
+
+            # 等待服务器完全启动
+            time.sleep(3)
+
+            # 获取最新状态
+            current_status = self._get_server_status()
+
+            # 记录启动结果
+            if current_status["running"]:
+                logger.info(f"服务器已成功启动，PID: {current_status['pid']}")
+                return {
+                    "message": "服务器已成功启动",
+                    "server_status": current_status
+                }
+            else:
+                logger.warning("服务器启动后状态检查失败，可能需要手动刷新状态")
+                return {
+                    "message": "服务器已启动，但状态检查未通过，请手动刷新状态",
+                    "server_status": current_status
+                }
+        except Exception as e:
+            logger.error(f"启动服务器失败: {str(e)}")
+            logger.error(traceback.format_exc())
+            return {
+                "message": f"启动服务器失败: {str(e)}",
+                "error": True,
+                "server_status": self._get_server_status()
+            }
+
+    def _stop_server_api(self) -> Dict[str, Any]:
+        """API Endpoint: 停止服务器"""
+        try:
+            # 检查服务器是否已经停止
+            status = self._get_server_status()
+            if not status["running"]:
+                return {
+                    "message": "服务器已经停止",
+                    "server_status": status
+                }
+
+            # 停止服务器
+            self._stop_server()
+
+            # 等待服务器完全停止
+            time.sleep(2)
+
+            # 获取最新状态
+            current_status = self._get_server_status()
+
+            # 记录停止结果
+            if not current_status["running"]:
+                logger.info("服务器已成功停止")
+                return {
+                    "message": "服务器已成功停止",
+                    "server_status": current_status
+                }
+            else:
+                logger.warning("服务器停止后状态检查失败，可能需要手动刷新状态")
+                return {
+                    "message": "服务器停止失败，请手动刷新状态",
+                    "server_status": current_status
+                }
+        except Exception as e:
+            logger.error(f"停止服务器失败: {str(e)}")
+            logger.error(traceback.format_exc())
+            return {
+                "message": f"停止服务器失败: {str(e)}",
+                "error": True,
+                "server_status": self._get_server_status()
+            }
+
     def _get_server_status_api(self) -> Dict[str, Any]:
         """API Endpoint: 获取服务器状态"""
         try:
@@ -1133,6 +1325,7 @@ class MCPServer(_PluginBase):
             )
 
             return {
+                "enable": self._enable,
                 "server_status": status,
                 "message": "获取服务器状态成功"
             }
@@ -1149,6 +1342,61 @@ class MCPServer(_PluginBase):
                     "url": None
                 }
             }
+
+    # --- 获取 MoviePilot 的 access token ---
+    def _get_moviepilot_access_token(self) -> Optional[str]:
+        """
+        获取 MoviePilot 的 access token
+        通过用户名和密码登录获取 access_token，用于访问需要 Bearer 认证的 API
+        """
+        try:
+            # 获取用户名和密码
+            username = self._config.get("mp_username", "admin")
+            password = self._config.get("mp_password", "")
+
+            if not username or not password:
+                logger.error("未配置 MoviePilot 用户名或密码，无法获取 access token")
+                return None
+
+            logger.info(f"尝试使用用户名 {username} 登录获取 access token")
+
+            # 构建请求 URL
+            token_url = f"http://localhost:{settings.PORT}/api/v1/login/access-token"
+
+            # 构建请求数据
+            data = {
+                "username": username,
+                "password": password
+            }
+
+            # 发送请求
+            response = requests.post(
+                token_url,
+                data=data,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=10
+            )
+
+            if response.status_code != 200:
+                logger.error(
+                    f"登录获取 access token 失败，状态码: {response.status_code}, 响应: {response.text}")
+                return None
+
+            # 解析响应获取 access_token
+            token_data = response.json()
+            access_token = token_data.get("access_token")
+
+            if not access_token:
+                logger.error("响应中未包含 access_token")
+                return None
+
+            logger.info("成功获取 MoviePilot 的 access token")
+            return access_token
+
+        except Exception as e:
+            logger.error(f"获取 MoviePilot access token 失败: {str(e)}")
+            logger.error(traceback.format_exc())
+            return None
 
     # --- V2 Vue Interface Method ---
     @staticmethod

@@ -36,7 +36,8 @@
                 v-model="config.port"
                 label="端口号"
                 variant="outlined"
-                hint="MCP服务端口号"
+                hint="MCP服务端口号(1-65535)"
+                :rules="portRules"
               ></v-text-field>
             </v-col>
             <v-col cols="12" md="6">
@@ -87,6 +88,34 @@
               </v-text-field>
             </v-col>
           </v-row>
+
+          <!-- MoviePilot 认证配置区域 -->
+          <div class="text-subtitle-1 font-weight-bold mt-4 mb-2">MoviePilot 认证配置</div>
+          <v-row>
+            <v-col cols="12" md="6">
+              <v-text-field
+                v-model="config.mp_username"
+                label="MoviePilot 用户名"
+                variant="outlined"
+                hint="用于获取 MoviePilot 的 access_token"
+                persistent-hint
+                :rules="[v => !!v || 'MoviePilot用户名不能为空']"
+              ></v-text-field>
+            </v-col>
+            <v-col cols="12" md="6">
+              <v-text-field
+                v-model="config.mp_password"
+                label="MoviePilot 密码"
+                variant="outlined"
+                hint="用于获取 MoviePilot 的 access_token"
+                persistent-hint
+                :rules="[v => !!v || 'MoviePilot密码不能为空']"
+                :append-inner-icon="showMpPassword ? 'mdi-eye-off' : 'mdi-eye'"
+                :type="showMpPassword ? 'text' : 'password'"
+                @click:append-inner="showMpPassword = !showMpPassword"
+              ></v-text-field>
+            </v-col>
+          </v-row>
         </v-form>
       </v-card-text>
       <v-card-actions>
@@ -100,7 +129,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
 
 // 接收初始配置
 const props = defineProps({
@@ -121,15 +150,28 @@ const error = ref(null)
 const successMessage = ref(null)
 const saving = ref(false)
 const showApiKey = ref(false)
+const showMpPassword = ref(false)
 const resettingApiKey = ref(false)
 const copyingApiKey = ref(false)
+
+// 表单验证规则
+const portRules = [
+  v => !!v || '端口号不能为空',
+  v => /^\d+$/.test(v) || '端口号必须是数字',
+  v => (parseInt(v) >= 1 && parseInt(v) <= 65535) || '端口号必须在1-65535之间'
+]
 
 // 配置数据，使用默认值和初始配置合并
 const defaultConfig = {
   enable: true,
   port: '3111',
   auth_token: '',
+  mp_username: 'admin',
+  mp_password: '',
 }
+
+// 记录原始启用状态
+const originalEnableState = ref(false)
 
 // 合并默认配置和初始配置
 const config = reactive({ ...defaultConfig })
@@ -143,6 +185,7 @@ onMounted(() => {
     // 处理顶层的 enable 属性
     if ('enable' in props.initialConfig) {
       config.enable = props.initialConfig.enable
+      originalEnableState.value = props.initialConfig.enable
     }
 
     // 处理嵌套在 config 对象中的属性
@@ -156,9 +199,27 @@ onMounted(() => {
       if ('auth_token' in props.initialConfig.config) {
         config.auth_token = props.initialConfig.config.auth_token
       }
+
+      // 处理 MoviePilot 用户名
+      if ('mp_username' in props.initialConfig.config) {
+        config.mp_username = props.initialConfig.config.mp_username
+      }
+
+      // 处理 MoviePilot 密码
+      if ('mp_password' in props.initialConfig.config) {
+        config.mp_password = props.initialConfig.config.mp_password
+      }
     }
 
     console.log('处理后的配置:', config)
+  }
+})
+
+// 监听启用状态变化，自动保存配置
+watch(() => config.enable, (newValue, oldValue) => {
+  if (newValue !== oldValue && oldValue !== undefined) {
+    console.log(`启用状态从 ${oldValue} 变为 ${newValue}，自动保存配置`)
+    saveConfig()
   }
 })
 
@@ -184,7 +245,9 @@ async function saveConfig() {
       enable: config.enable,
       config: {
         port: config.port,
-        auth_token: config.auth_token
+        auth_token: config.auth_token,
+        mp_username: config.mp_username,
+        mp_password: config.mp_password
       }
     }
     console.log('保存配置:', configToSave)
@@ -212,7 +275,7 @@ function resetForm() {
 
 // 获取插件ID
 function getPluginId() {
-  return "MCPServer";
+  return "mcpserver";
 }
 
 // 重置API密钥

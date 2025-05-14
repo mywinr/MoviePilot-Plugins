@@ -21,16 +21,27 @@ logger = logging.getLogger(__name__)
 
 # Token管理器
 class TokenManager:
-    def __init__(self, initial_token: str = None):
+    def __init__(self, initial_token: str = None, access_token: str = None):
         self.token = initial_token
+        self.access_token = access_token
+
         if not self.token:
             logger.warning("服务器启动时没有设置Token，API安全性无法保证")
         else:
             logger.info("Token管理器已初始化")
-    
+
+        if self.access_token:
+            logger.info("MoviePilot access_token 已设置")
+        else:
+            logger.warning("未设置 MoviePilot access_token，访问 MoviePilot API 可能受限")
+
     def get_token(self) -> str:
         """获取当前token"""
         return self.token
+
+    def get_access_token(self) -> str:
+        """获取 MoviePilot access_token"""
+        return self.access_token
 
 
 # 认证中间件
@@ -38,18 +49,18 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, token_manager: TokenManager):
         super().__init__(app)
         self.token_manager = token_manager
-    
+
     async def dispatch(self, request, call_next):
         # 获取当前token
         current_token = self.token_manager.get_token()
-        
+
         # 无token时拒绝所有请求（确保安全性）
         if not current_token:
             return JSONResponse(
                 {"message": "服务器未设置认证Token，拒绝访问", "error": "unauthorized"},
                 status_code=401
             )
-        
+
         # 验证Authorization头
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
@@ -57,14 +68,14 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
                 {"message": "认证失败，请提供Bearer Token", "error": "unauthorized"},
                 status_code=401
             )
-        
+
         token = auth_header.replace("Bearer ", "")
         if token != current_token:
             return JSONResponse(
                 {"message": "认证失败，提供的Token无效", "error": "unauthorized"},
                 status_code=401
             )
-        
+
         # 认证通过
         return await call_next(request)
 
@@ -88,12 +99,18 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
     default="",
     help="Initial Bearer authentication token for API security",
 )
+@click.option(
+    "--access-token",
+    default="",
+    help="MoviePilot access token for API requests",
+)
 def main(
     host: str,
     port: int,
     log_level: str,
     json_response: bool,
     auth_token: str,
+    access_token: str,
 ) -> int:
     # Configure logging
     logging.basicConfig(
@@ -102,10 +119,10 @@ def main(
     )
 
     logger.info(f"正在启动MCP服务器于 {host}:{port}")
-    
+
     # 创建Token管理器
-    token_manager = TokenManager(auth_token)
-    
+    token_manager = TokenManager(auth_token, access_token)
+
     if auth_token:
         logger.info("API认证已启用，需要Bearer Token才能访问")
     else:
@@ -215,7 +232,7 @@ def main(
     middleware = [
         Middleware(BearerAuthMiddleware, token_manager=token_manager)
     ]
-    
+
     # 创建路由
     routes = [
         Mount("/mcp", app=handle_streamable_http),
@@ -229,7 +246,7 @@ def main(
         lifespan=lifespan,
         middleware=middleware,
     )
-    
+
     # 在应用状态中存储token管理器
     starlette_app.state.token_manager = token_manager
 

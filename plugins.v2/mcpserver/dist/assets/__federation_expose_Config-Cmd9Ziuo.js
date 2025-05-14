@@ -7,7 +7,7 @@ const {createTextVNode:_createTextVNode,resolveComponent:_resolveComponent,withC
 const _hoisted_1 = { class: "plugin-config" };
 const _hoisted_2 = { class: "d-flex" };
 
-const {ref,reactive,onMounted} = await importShared('vue');
+const {ref,reactive,onMounted,watch} = await importShared('vue');
 
 
 // 接收初始配置
@@ -36,15 +36,28 @@ const error = ref(null);
 const successMessage = ref(null);
 const saving = ref(false);
 const showApiKey = ref(false);
+const showMpPassword = ref(false);
 const resettingApiKey = ref(false);
 const copyingApiKey = ref(false);
+
+// 表单验证规则
+const portRules = [
+  v => !!v || '端口号不能为空',
+  v => /^\d+$/.test(v) || '端口号必须是数字',
+  v => (parseInt(v) >= 1 && parseInt(v) <= 65535) || '端口号必须在1-65535之间'
+];
 
 // 配置数据，使用默认值和初始配置合并
 const defaultConfig = {
   enable: true,
   port: '3111',
   auth_token: '',
+  mp_username: 'admin',
+  mp_password: '',
 };
+
+// 记录原始启用状态
+const originalEnableState = ref(false);
 
 // 合并默认配置和初始配置
 const config = reactive({ ...defaultConfig });
@@ -58,6 +71,7 @@ onMounted(() => {
     // 处理顶层的 enable 属性
     if ('enable' in props.initialConfig) {
       config.enable = props.initialConfig.enable;
+      originalEnableState.value = props.initialConfig.enable;
     }
 
     // 处理嵌套在 config 对象中的属性
@@ -71,9 +85,27 @@ onMounted(() => {
       if ('auth_token' in props.initialConfig.config) {
         config.auth_token = props.initialConfig.config.auth_token;
       }
+
+      // 处理 MoviePilot 用户名
+      if ('mp_username' in props.initialConfig.config) {
+        config.mp_username = props.initialConfig.config.mp_username;
+      }
+
+      // 处理 MoviePilot 密码
+      if ('mp_password' in props.initialConfig.config) {
+        config.mp_password = props.initialConfig.config.mp_password;
+      }
     }
 
     console.log('处理后的配置:', config);
+  }
+});
+
+// 监听启用状态变化，自动保存配置
+watch(() => config.enable, (newValue, oldValue) => {
+  if (newValue !== oldValue && oldValue !== undefined) {
+    console.log(`启用状态从 ${oldValue} 变为 ${newValue}，自动保存配置`);
+    saveConfig();
   }
 });
 
@@ -99,7 +131,9 @@ async function saveConfig() {
       enable: config.enable,
       config: {
         port: config.port,
-        auth_token: config.auth_token
+        auth_token: config.auth_token,
+        mp_username: config.mp_username,
+        mp_password: config.mp_password
       }
     };
     console.log('保存配置:', configToSave);
@@ -127,7 +161,7 @@ function resetForm() {
 
 // 获取插件ID
 function getPluginId() {
-  return "MCPServer";
+  return "mcpserver";
 }
 
 // 重置API密钥
@@ -300,7 +334,7 @@ return (_ctx, _cache) => {
             }, {
               default: _withCtx(() => [
                 _createVNode(_component_v_icon, { left: "" }, {
-                  default: _withCtx(() => _cache[6] || (_cache[6] = [
+                  default: _withCtx(() => _cache[9] || (_cache[9] = [
                     _createTextVNode("mdi-close")
                   ])),
                   _: 1
@@ -311,7 +345,7 @@ return (_ctx, _cache) => {
           ]),
           default: _withCtx(() => [
             _createVNode(_component_v_card_title, null, {
-              default: _withCtx(() => _cache[5] || (_cache[5] = [
+              default: _withCtx(() => _cache[8] || (_cache[8] = [
                 _createTextVNode("插件配置")
               ])),
               _: 1
@@ -349,11 +383,11 @@ return (_ctx, _cache) => {
               ref_key: "form",
               ref: form,
               modelValue: isFormValid.value,
-              "onUpdate:modelValue": _cache[4] || (_cache[4] = $event => ((isFormValid).value = $event)),
+              "onUpdate:modelValue": _cache[7] || (_cache[7] = $event => ((isFormValid).value = $event)),
               onSubmit: _withModifiers(saveConfig, ["prevent"])
             }, {
               default: _withCtx(() => [
-                _cache[9] || (_cache[9] = _createElementVNode("div", { class: "text-subtitle-1 font-weight-bold mt-4 mb-2" }, "基本设置", -1)),
+                _cache[12] || (_cache[12] = _createElementVNode("div", { class: "text-subtitle-1 font-weight-bold mt-4 mb-2" }, "基本设置", -1)),
                 _createVNode(_component_v_row, null, {
                   default: _withCtx(() => [
                     _createVNode(_component_v_col, { cols: "12" }, {
@@ -373,7 +407,7 @@ return (_ctx, _cache) => {
                   ]),
                   _: 1
                 }),
-                _cache[10] || (_cache[10] = _createElementVNode("div", { class: "text-subtitle-1 font-weight-bold mt-4 mb-2" }, "MCP Server配置", -1)),
+                _cache[13] || (_cache[13] = _createElementVNode("div", { class: "text-subtitle-1 font-weight-bold mt-4 mb-2" }, "MCP Server配置", -1)),
                 _createVNode(_component_v_row, null, {
                   default: _withCtx(() => [
                     _createVNode(_component_v_col, {
@@ -386,7 +420,8 @@ return (_ctx, _cache) => {
                           "onUpdate:modelValue": _cache[1] || (_cache[1] = $event => ((config.port) = $event)),
                           label: "端口号",
                           variant: "outlined",
-                          hint: "MCP服务端口号"
+                          hint: "MCP服务端口号(1-65535)",
+                          rules: portRules
                         }, null, 8, ["modelValue"])
                       ]),
                       _: 1
@@ -421,7 +456,7 @@ return (_ctx, _cache) => {
                                   }), {
                                     default: _withCtx(() => [
                                       _createVNode(_component_v_icon, null, {
-                                        default: _withCtx(() => _cache[7] || (_cache[7] = [
+                                        default: _withCtx(() => _cache[10] || (_cache[10] = [
                                           _createTextVNode("mdi-content-copy")
                                         ])),
                                         _: 1
@@ -444,7 +479,7 @@ return (_ctx, _cache) => {
                                   }), {
                                     default: _withCtx(() => [
                                       _createVNode(_component_v_icon, null, {
-                                        default: _withCtx(() => _cache[8] || (_cache[8] = [
+                                        default: _withCtx(() => _cache[11] || (_cache[11] = [
                                           _createTextVNode("mdi-key-alert")
                                         ])),
                                         _: 1
@@ -464,6 +499,49 @@ return (_ctx, _cache) => {
                     })
                   ]),
                   _: 1
+                }),
+                _cache[14] || (_cache[14] = _createElementVNode("div", { class: "text-subtitle-1 font-weight-bold mt-4 mb-2" }, "MoviePilot 认证配置", -1)),
+                _createVNode(_component_v_row, null, {
+                  default: _withCtx(() => [
+                    _createVNode(_component_v_col, {
+                      cols: "12",
+                      md: "6"
+                    }, {
+                      default: _withCtx(() => [
+                        _createVNode(_component_v_text_field, {
+                          modelValue: config.mp_username,
+                          "onUpdate:modelValue": _cache[4] || (_cache[4] = $event => ((config.mp_username) = $event)),
+                          label: "MoviePilot 用户名",
+                          variant: "outlined",
+                          hint: "用于获取 MoviePilot 的 access_token",
+                          "persistent-hint": "",
+                          rules: [v => !!v || 'MoviePilot用户名不能为空']
+                        }, null, 8, ["modelValue", "rules"])
+                      ]),
+                      _: 1
+                    }),
+                    _createVNode(_component_v_col, {
+                      cols: "12",
+                      md: "6"
+                    }, {
+                      default: _withCtx(() => [
+                        _createVNode(_component_v_text_field, {
+                          modelValue: config.mp_password,
+                          "onUpdate:modelValue": _cache[5] || (_cache[5] = $event => ((config.mp_password) = $event)),
+                          label: "MoviePilot 密码",
+                          variant: "outlined",
+                          hint: "用于获取 MoviePilot 的 access_token",
+                          "persistent-hint": "",
+                          rules: [v => !!v || 'MoviePilot密码不能为空'],
+                          "append-inner-icon": showMpPassword.value ? 'mdi-eye-off' : 'mdi-eye',
+                          type: showMpPassword.value ? 'text' : 'password',
+                          "onClick:appendInner": _cache[6] || (_cache[6] = $event => (showMpPassword.value = !showMpPassword.value))
+                        }, null, 8, ["modelValue", "rules", "append-inner-icon", "type"])
+                      ]),
+                      _: 1
+                    })
+                  ]),
+                  _: 1
                 })
               ]),
               _: 1
@@ -478,7 +556,7 @@ return (_ctx, _cache) => {
               onClick: resetForm,
               variant: "text"
             }, {
-              default: _withCtx(() => _cache[11] || (_cache[11] = [
+              default: _withCtx(() => _cache[15] || (_cache[15] = [
                 _createTextVNode("重置")
               ])),
               _: 1
@@ -489,7 +567,7 @@ return (_ctx, _cache) => {
               "prepend-icon": "mdi-arrow-left",
               variant: "text"
             }, {
-              default: _withCtx(() => _cache[12] || (_cache[12] = [
+              default: _withCtx(() => _cache[16] || (_cache[16] = [
                 _createTextVNode("返回服务器状态")
               ])),
               _: 1
@@ -501,7 +579,7 @@ return (_ctx, _cache) => {
               onClick: saveConfig,
               loading: saving.value
             }, {
-              default: _withCtx(() => _cache[13] || (_cache[13] = [
+              default: _withCtx(() => _cache[17] || (_cache[17] = [
                 _createTextVNode("保存配置")
               ])),
               _: 1
@@ -517,6 +595,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const ConfigComponent = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-9e188a16"]]);
+const ConfigComponent = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-16bc76e6"]]);
 
 export { ConfigComponent as default };

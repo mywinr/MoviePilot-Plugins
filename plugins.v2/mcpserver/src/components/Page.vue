@@ -11,6 +11,9 @@
       <v-card-text class="px-3 py-2">
         <v-alert v-if="error" type="error" density="compact" class="mb-2 text-caption" variant="tonal" closable>{{ error }}</v-alert>
         <v-alert v-if="actionMessage" :type="actionMessageType" density="compact" class="mb-2 text-caption" variant="tonal" closable>{{ actionMessage }}</v-alert>
+        <v-alert v-if="initialDataLoaded && !pluginEnabled" type="warning" density="compact" class="mb-2 text-caption" variant="tonal">
+          插件当前已禁用，服务器操作按钮不可用。请在配置页面启用插件后再操作。
+        </v-alert>
 
         <v-skeleton-loader v-if="loading && !initialDataLoaded" type="article, actions"></v-skeleton-loader>
 
@@ -86,16 +89,51 @@
       <v-card-actions class="px-2 py-1">
         <v-btn color="primary" @click="notifySwitch" prepend-icon="mdi-cog" variant="text" size="small">配置</v-btn>
         <v-spacer></v-spacer>
-        <v-btn color="info" @click="fetchServerStatus" :loading="loading" prepend-icon="mdi-refresh" variant="text" size="small">刷新状态</v-btn>
         <v-btn
+          color="info"
+          @click="fetchServerStatus"
+          :loading="loading"
+          prepend-icon="mdi-refresh"
+          variant="text"
+          size="small"
+        >
+          刷新状态
+        </v-btn>
+        <v-btn
+          v-if="!serverStatus.running"
+          color="success"
+          @click="startServer"
+          :loading="starting"
+          prepend-icon="mdi-play"
+          variant="text"
+          size="small"
+          :disabled="!pluginEnabled"
+        >
+          启动服务器
+        </v-btn>
+        <v-btn
+          v-if="serverStatus.running"
+          color="warning"
+          @click="stopServer"
+          :loading="stopping"
+          prepend-icon="mdi-stop"
+          variant="text"
+          size="small"
+          :disabled="!pluginEnabled"
+        >
+          停止服务器
+        </v-btn>
+        <v-btn
+          v-if="serverStatus.running"
           color="success"
           @click="restartServer"
           :loading="restarting"
           prepend-icon="mdi-restart"
           variant="text"
           size="small"
+          :disabled="!pluginEnabled"
         >
-          {{ serverStatus.running ? '重启服务器' : '启动服务器' }}
+          重启服务器
         </v-btn>
         <v-btn color="grey" @click="notifyClose" prepend-icon="mdi-close" variant="text" size="small">关闭</v-btn>
       </v-card-actions>
@@ -123,8 +161,13 @@ const loading = ref(false)
 const error = ref(null)
 const initialDataLoaded = ref(false)
 const restarting = ref(false)
+const starting = ref(false)
+const stopping = ref(false)
 const actionMessage = ref(null)
 const actionMessageType = ref('info')
+
+// 插件启用状态
+const pluginEnabled = ref(true)
 
 // 服务器状态
 const serverStatus = reactive({
@@ -160,10 +203,19 @@ async function fetchServerStatus() {
     const statusData = await props.api.get(`plugin/${pluginId}/status`)
     console.log('直接获取的状态数据:', statusData)
 
-    if (statusData && statusData.server_status) {
-      Object.assign(serverStatus, statusData.server_status)
+    if (statusData) {
+      // 更新服务器状态
+      if (statusData.server_status) {
+        Object.assign(serverStatus, statusData.server_status)
+      }
+
+      // 更新插件启用状态
+      if ('enable' in statusData) {
+        pluginEnabled.value = statusData.enable
+      }
+
       initialDataLoaded.value = true
-      actionMessage.value = '已通过备用方法获取服务器状态'
+      actionMessage.value = '已获取服务器状态'
       actionMessageType.value = 'success'
       setTimeout(() => { actionMessage.value = null }, 3000)
     }
@@ -171,6 +223,115 @@ async function fetchServerStatus() {
     error.value = err.message || '获取服务器状态失败，请检查网络或API'
   } finally {
     loading.value = false
+  }
+}
+
+// 启动服务器
+async function startServer() {
+  starting.value = true
+  error.value = null
+  actionMessage.value = null
+
+  const pluginId = getPluginId()
+  if (!pluginId) {
+    starting.value = false
+    return
+  }
+
+  try {
+    // 调用启动API
+    const data = await props.api.post(`plugin/${pluginId}/start`)
+
+    if (data) {
+      if (data.error) {
+        throw new Error(data.message || '启动服务器时发生错误')
+      }
+
+      // 更新服务器状态
+      if (data.server_status) {
+        Object.assign(serverStatus, data.server_status)
+      }
+
+      actionMessage.value = data.message || '服务器已启动'
+      actionMessageType.value = 'success'
+
+      // 设置多次刷新状态的定时器，确保能获取到最新状态
+      // 第一次刷新 - 3秒后
+      setTimeout(() => {
+        fetchServerStatus()
+
+        // 第二次刷新 - 8秒后
+        setTimeout(() => {
+          fetchServerStatus()
+
+          // 第三次刷新 - 15秒后（如果状态仍然是停止）
+          if (!serverStatus.running) {
+            setTimeout(() => fetchServerStatus(), 7000)
+          }
+        }, 5000)
+      }, 3000)
+    } else {
+      throw new Error('启动服务器响应无效或为空')
+    }
+  } catch (err) {
+    console.error('启动服务器失败:', err)
+    error.value = err.message || '启动服务器失败'
+    actionMessageType.value = 'error'
+  } finally {
+    starting.value = false
+    setTimeout(() => { actionMessage.value = null }, 8000)
+  }
+}
+
+// 停止服务器
+async function stopServer() {
+  stopping.value = true
+  error.value = null
+  actionMessage.value = null
+
+  const pluginId = getPluginId()
+  if (!pluginId) {
+    stopping.value = false
+    return
+  }
+
+  try {
+    // 调用停止API
+    const data = await props.api.post(`plugin/${pluginId}/stop`)
+
+    if (data) {
+      if (data.error) {
+        throw new Error(data.message || '停止服务器时发生错误')
+      }
+
+      // 更新服务器状态
+      if (data.server_status) {
+        Object.assign(serverStatus, data.server_status)
+      }
+
+      actionMessage.value = data.message || '服务器已停止'
+      actionMessageType.value = 'success'
+
+      // 设置多次刷新状态的定时器，确保能获取到最新状态
+      // 第一次刷新 - 2秒后
+      setTimeout(() => {
+        fetchServerStatus()
+
+        // 第二次刷新 - 5秒后
+        setTimeout(() => {
+          fetchServerStatus()
+        }, 3000)
+      }, 2000)
+    } else {
+      throw new Error('停止服务器响应无效或为空')
+    }
+  } catch (err) {
+    console.error('停止服务器失败:', err)
+    error.value = err.message || '停止服务器失败'
+    actionMessageType.value = 'error'
+  } finally {
+    stopping.value = false
+    setTimeout(() => { actionMessage.value = null }, 8000)
   }
 }
 
@@ -203,21 +364,24 @@ async function restartServer() {
       actionMessage.value = data.message || '服务器已重启'
       actionMessageType.value = 'success'
 
-      // 设置多次刷新状态的定时器，确保能获取到最新状态
-      // 第一次刷新 - 3秒后
-      setTimeout(() => {
-        fetchServerStatus()
-
-        // 第二次刷新 - 8秒后
+      // 如果服务器已停止，提示用户手动启动
+      if (!serverStatus.running) {
+        setTimeout(() => {
+          actionMessage.value = '服务器已停止，请手动启动'
+          actionMessageType.value = 'info'
+        }, 3000)
+      } else {
+        // 设置多次刷新状态的定时器，确保能获取到最新状态
+        // 第一次刷新 - 3秒后
         setTimeout(() => {
           fetchServerStatus()
 
-          // 第三次刷新 - 15秒后（如果状态仍然是停止）
-          if (!serverStatus.running) {
-            setTimeout(() => fetchServerStatus(), 7000)
-          }
-        }, 5000)
-      }, 3000)
+          // 第二次刷新 - 8秒后
+          setTimeout(() => {
+            fetchServerStatus()
+          }, 5000)
+        }, 3000)
+      }
     } else {
       throw new Error('重启服务器响应无效或为空')
     }
