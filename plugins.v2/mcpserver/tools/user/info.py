@@ -1,9 +1,17 @@
 import json
+import logging
 import mcp.types as types
 from ..base import BaseTool
 
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+
 class UserInfoTool(BaseTool):
-    async def execute(self, tool_name: str, arguments: dict) -> list[types.TextContent]:
+    async def execute(
+        self, tool_name: str, arguments: dict
+    ) -> list[types.TextContent]:
         if tool_name == "user-info":
             return await self._get_current_user()
         elif tool_name == "get-user":
@@ -24,7 +32,9 @@ class UserInfoTool(BaseTool):
         )
         return self._format_user_response(response, "当前用户信息")
 
-    async def _get_user_by_name(self, username: str) -> list[types.TextContent]:
+    async def _get_user_by_name(
+        self, username: str
+    ) -> list[types.TextContent]:
         """获取指定用户信息"""
         if not username:
             return [
@@ -40,7 +50,9 @@ class UserInfoTool(BaseTool):
         )
         return self._format_user_response(response, f"用户 {username} 的信息")
 
-    def _format_user_response(self, response: dict, title: str) -> list[types.TextContent]:
+    def _format_user_response(
+        self, response: dict, title: str
+    ) -> list[types.TextContent]:
         """格式化用户信息响应"""
         if "error" in response:
             return [
@@ -55,14 +67,14 @@ class UserInfoTool(BaseTool):
             if isinstance(value, (dict, list)):
                 value = json.dumps(value, ensure_ascii=False, indent=2)
             user_info.append(f"{key}: {value}")
-            
+
         return [
             types.TextContent(
                 type="text",
                 text=f"{title}:\n" + "\n".join(user_info)
             )
         ]
-    
+
     @property
     def tool_info(self) -> list[types.Tool]:
         return [

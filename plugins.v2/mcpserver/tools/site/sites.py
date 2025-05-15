@@ -1,14 +1,17 @@
 import json
+import logging
 import mcp.types as types
 from ..base import BaseTool
 
-import logging
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
+
 class GetSitesTool(BaseTool):
-    async def execute(self, tool_name: str, arguments: dict) -> list[types.TextContent]:
+    async def execute(
+        self, tool_name: str, arguments: dict
+    ) -> list[types.TextContent]:
         if tool_name == "get-sites":
             return await self._get_sites()
         elif tool_name == "get-site-data":
@@ -21,6 +24,7 @@ class GetSitesTool(BaseTool):
                     text=f"错误：未知的工具 '{tool_name}'"
                 )
             ]
+
     async def _get_site_data(self, site_id: str) -> list[types.TextContent]:
         """获取指定站点数据"""
         if not site_id:
@@ -63,7 +67,7 @@ class GetSitesTool(BaseTool):
             method="GET",
             endpoint="/api/v1/site/"
         )
-        
+
         # 检查是否有错误
         if "error" in response:
             return [
@@ -72,7 +76,7 @@ class GetSitesTool(BaseTool):
                     text=f"获取站点列表失败: {response['error']}"
                 )
             ]
-  
+
         # 格式化站点信息
         if not response:
             return [
@@ -81,19 +85,20 @@ class GetSitesTool(BaseTool):
                     text="暂无站点信息"
                 )
             ]
-            
-        sites_info = []
-        for site in response:
-            site_str = json.dumps(site, ensure_ascii=False, indent=2)
-            sites_info.append(site_str)
-            
+
+        # 使用列表推导式简化代码
+        sites_info = [
+            json.dumps(site, ensure_ascii=False, indent=2)
+            for site in response
+        ]
+
         return [
             types.TextContent(
                 type="text",
                 text="站点列表:\n" + "\n".join(sites_info)
             )
         ]
-    
+
     @property
     def tool_info(self) -> list[types.Tool]:
         return [

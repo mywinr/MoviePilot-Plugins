@@ -15,6 +15,11 @@ from pathlib import Path
 from app.log import logger
 from app.plugins import _PluginBase
 from app.core.config import settings
+from app.db.site_oper import SiteOper
+from app.utils.string import StringUtils
+from app.helper.downloader import DownloaderHelper
+from app.helper.directory import DirectoryHelper
+from app.schemas import ServiceInfo
 
 
 def generate_token(length=32):
@@ -29,7 +34,10 @@ class MCPServer(_PluginBase):
     # 插件描述
     plugin_desc = "使用MCP客户端通过大模型来操作MoviePilot"
     # 插件图标
-    plugin_icon = "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/mcp.png"
+    plugin_icon = (
+        "https://raw.githubusercontent.com/DzAvril/"
+        "MoviePilot-Plugins/main/icons/mcp.png"
+    )
     # 插件版本
     plugin_version = "1.0"
     # 插件作者
@@ -1197,6 +1205,41 @@ class MCPServer(_PluginBase):
                 "methods": ["GET"],
                 "auth": "bear",
                 "summary": "获取服务器状态"
+            },
+            {
+                "path": "/download_torrent",
+                "endpoint": self._download_torrent_api,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "下载种子",
+                "request_body": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "torrent_url": {
+                                        "type": "string",
+                                        "description": "种子下载链接"
+                                    },
+                                    "downloader": {
+                                        "type": "string",
+                                        "description": "下载器名称"
+                                    },
+                                    "save_path": {
+                                        "type": "string",
+                                        "description": "保存路径"
+                                    },
+                                    "is_paused": {
+                                        "type": "boolean",
+                                        "description": "是否暂停下载"
+                                    }
+                                },
+                                "required": ["torrent_url"]
+                            }
+                        }
+                    }
+                }
             }
         ]
 
@@ -1343,6 +1386,127 @@ class MCPServer(_PluginBase):
                 }
             }
 
+    def _download_torrent_api(self, body: dict = None) -> Dict[str, Any]:
+        """API Endpoint: 下载种子"""
+        try:
+            # 从请求体中获取参数
+            if body is None:
+                logger.error("请求体为空")
+                return {
+                    "success": False,
+                    "message": "请求体为空，请提供torrent_url参数"
+                }
+
+            # 记录请求体
+            logger.info(f"下载种子API请求体: {json.dumps(body, ensure_ascii=False)}")
+
+            # 获取参数
+            torrent_url = body.get("torrent_url")
+            downloader = body.get("downloader")
+            save_path = body.get("save_path")
+            is_paused = body.get("is_paused", False)
+
+            if not torrent_url:
+                return {
+                    "success": False,
+                    "message": "缺少种子链接参数"
+                }
+
+            # 如果没有指定下载器，返回错误信息
+            if not downloader:
+                logger.error("未指定下载器，请在请求中提供downloader参数")
+                return {
+                    "success": False,
+                    "message": (
+                        "未指定下载器，请使用get-downloaders工具获取可用的下载器列表，"
+                        "然后在请求中提供downloader参数"
+                    )
+                }
+
+            # 导入必要的模块
+            from app.db.site_oper import SiteOper
+            from app.utils.string import StringUtils
+            from app.helper.downloader import DownloaderHelper
+            from app.schemas import ServiceInfo
+
+            # 初始化辅助类
+            site_oper = SiteOper()
+            downloader_helper = DownloaderHelper()
+
+            # 获取种子对应站点cookie
+            domain = StringUtils.get_url_domain(torrent_url)
+            if not domain:
+                return {
+                    "success": False,
+                    "message": f"无法从链接获取站点域名: {torrent_url}"
+                }
+
+            # 查询站点
+            site = site_oper.get_by_domain(domain)
+            if not site or not site.cookie:
+                return {
+                    "success": False,
+                    "message": f"无法获取站点 {domain} 的cookie信息"
+                }
+
+            # 获取下载器服务
+            service = downloader_helper.get_service(downloader)
+            if not service or not service.instance:
+                return {
+                    "success": False,
+                    "message": f"获取下载器 {downloader} 实例失败"
+                }
+
+            if service.instance.is_inactive():
+                return {
+                    "success": False,
+                    "message": f"下载器 {downloader} 未连接"
+                }
+
+            # 添加下载任务
+            downloader_instance = service.instance
+
+            # 添加下载任务
+            torrent = downloader_instance.add_torrent(
+                content=torrent_url,
+                download_dir=save_path,
+                is_paused=is_paused,
+                cookie=site.cookie
+            )
+
+            if not torrent:
+                return {
+                    "success": False,
+                    "message": "添加下载任务失败"
+                }
+
+            # 根据下载器类型处理返回值
+            if downloader_helper.is_downloader("qbittorrent", service=service):
+                download_id = torrent
+            elif downloader_helper.is_downloader(
+                "transmission", service=service
+            ):
+                download_id = torrent.hashString
+            else:
+                # 尝试获取通用ID
+                download_id = getattr(torrent, "id", str(torrent))
+
+            return {
+                "success": True,
+                "message": "种子添加下载成功",
+                "download_id": download_id,
+                "site": site.name,
+                "save_path": save_path
+            }
+
+        except Exception as e:
+            logger.error(f"下载种子失败: {str(e)}")
+            logger.error(traceback.format_exc())
+            return {
+                "success": False,
+                "message": f"下载种子失败: {str(e)}"
+            }
+
     # --- 获取 MoviePilot 的 access token ---
     def _get_moviepilot_access_token(self) -> Optional[str]:
         """
@@ -1361,7 +1525,8 @@ class MCPServer(_PluginBase):
             logger.info(f"尝试使用用户名 {username} 登录获取 access token")
 
             # 构建请求 URL
-            token_url = f"http://localhost:{settings.PORT}/api/v1/login/access-token"
+            base_url = f"http://localhost:{settings.PORT}"
+            token_url = f"{base_url}/api/v1/login/access-token"
 
             # 构建请求数据
             data = {
@@ -1379,7 +1544,8 @@ class MCPServer(_PluginBase):
 
             if response.status_code != 200:
                 logger.error(
-                    f"登录获取 access token 失败，状态码: {response.status_code}, 响应: {response.text}")
+                    f"登录获取 access token 失败，状态码: {response.status_code}, "
+                    f"响应: {response.text}")
                 return None
 
             # 解析响应获取 access_token
@@ -1424,9 +1590,15 @@ class MCPServer(_PluginBase):
         ]
 
     def get_dashboard(
-        self, key: str, **_
+        self, _key: str, **_kwargs
     ) -> Optional[Tuple[Dict[str, Any], Dict[str, Any], Optional[List[dict]]]]:
-        """获取插件仪表盘页面"""
+        """
+        获取插件仪表盘页面
+
+        参数:
+            _key: 仪表盘键名，未使用
+            _kwargs: 额外参数，未使用
+        """
         return {
             "cols": 12,
             "md": 6
