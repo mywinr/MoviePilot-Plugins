@@ -17,7 +17,7 @@ class Config:
     BASE_URL = "http://localhost:3001"  # 基础URL，不要在这里添加/api/v1前缀
     MAX_RETRIES = 3
     RETRY_DELAY = 1  # 基础重试延迟（秒）
-    REQUEST_TIMEOUT = 120.0  # 请求超时时间（秒）
+    REQUEST_TIMEOUT = 600  # 请求超时时间（秒）
 
 
 config = Config()

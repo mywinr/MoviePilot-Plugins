@@ -1211,35 +1211,7 @@ class MCPServer(_PluginBase):
                 "endpoint": self._download_torrent_api,
                 "methods": ["POST"],
                 "auth": "bear",
-                "summary": "下载种子",
-                "request_body": {
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "type": "object",
-                                "properties": {
-                                    "torrent_url": {
-                                        "type": "string",
-                                        "description": "种子下载链接"
-                                    },
-                                    "downloader": {
-                                        "type": "string",
-                                        "description": "下载器名称"
-                                    },
-                                    "save_path": {
-                                        "type": "string",
-                                        "description": "保存路径"
-                                    },
-                                    "is_paused": {
-                                        "type": "boolean",
-                                        "description": "是否暂停下载"
-                                    }
-                                },
-                                "required": ["torrent_url"]
-                            }
-                        }
-                    }
-                }
+                "summary": "下载种子"
             }
         ]
 
@@ -1405,6 +1377,13 @@ class MCPServer(_PluginBase):
             downloader = body.get("downloader")
             save_path = body.get("save_path")
             is_paused = body.get("is_paused", False)
+            if save_path is None:
+                # get default path based on media type
+                default_paths = DirectoryHelper().get_local_download_dirs()
+                for d in default_paths:
+                    if d.media_type == body.get("media_type"):
+                        save_path = d.download_path
+                        break
 
             if not torrent_url:
                 return {

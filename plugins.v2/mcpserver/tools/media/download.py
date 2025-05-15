@@ -372,7 +372,10 @@ class MovieDownloadTool(BaseTool):
                 logger.info("未指定下载器，尝试获取可用的下载器列表")
 
                 # 获取下载器列表
-                downloaders = await self._fetch_downloaders()
+                downloaders = await self._make_request(
+                    method="GET",
+                    endpoint="/api/v1/download/clients"
+                )
 
                 # 如果找到了下载器列表，尝试选择一个可用的下载器
                 if downloaders:
@@ -382,15 +385,12 @@ class MovieDownloadTool(BaseTool):
                             logger.info(f"自动选择下载器: {downloader}")
                             break
 
-                # 如果仍然没有找到下载器，使用默认的"qb"
-                if not downloader:
-                    downloader = "qb"
-                    logger.info("未找到可用的下载器，使用默认下载器: qb")
 
             # 准备请求参数
             payload = {
                 "torrent_url": torrent_url,
-                "downloader": downloader  # 现在我们总是有一个下载器，要么是用户指定的，要么是自动选择的
+                "downloader": downloader,
+                "media_type": arguments.get("media_type")
             }
 
             # 添加其他可选参数
@@ -398,9 +398,6 @@ class MovieDownloadTool(BaseTool):
                 payload["save_path"] = save_path
             if is_paused:
                 payload["is_paused"] = is_paused
-
-            # 记录请求参数
-            logger.info(f"下载请求参数: {json.dumps(payload, ensure_ascii=False)}")
 
             # 调用mcpserver的下载API
             response = await self._make_request(
@@ -540,42 +537,6 @@ class MovieDownloadTool(BaseTool):
             logger.warning(f"获取站点信息失败: {str(e)}")
             return []
 
-    async def _fetch_downloaders(self) -> list:
-        """
-        获取下载器列表，返回下载器对象列表
-        """
-        try:
-            response = await self._make_request(
-                method="GET",
-                endpoint="/api/v1/download/clients"
-            )
-
-            # 处理不同格式的响应
-            downloaders = []
-
-            if isinstance(response, dict):
-                # 检查是否包含下载器列表
-                if "downloaders" in response:
-                    downloaders = response.get("downloaders", [])
-                elif "clients" in response:
-                    downloaders = response.get("clients", [])
-                elif "data" in response and isinstance(response["data"], list):
-                    downloaders = response["data"]
-                else:
-                    # 如果是下载器统计信息，则使用默认下载器
-                    downloaders = [
-                        {"name": "qb", "type": "qbittorrent", "status": True}
-                    ]
-
-            elif isinstance(response, list):
-                downloaders = response
-
-            return downloaders
-
-        except Exception as e:
-            logger.error(f"获取下载器列表失败: {str(e)}")
-            return []
-
     async def _get_downloaders(
         self, _: dict = None
     ) -> list[types.TextContent]:
@@ -586,7 +547,10 @@ class MovieDownloadTool(BaseTool):
         """
         try:
             # 获取下载器列表
-            downloaders = await self._fetch_downloaders()
+            downloaders = await self._make_request(
+                method="GET",
+                endpoint="/api/v1/download/clients"
+            )
 
             # 格式化下载器信息
             result_text = "可用的下载器列表：\n\n"
@@ -594,27 +558,12 @@ class MovieDownloadTool(BaseTool):
             if not downloaders:
                 # 如果没有找到下载器，显示默认下载器
                 result_text += "没有找到可用的下载器，使用默认下载器：\n\n"
-                result_text += "1. qb (qbittorrent)\n"
-                result_text += "   状态: 未知\n"
-                result_text += "   使用命令: download-torrent "
-                result_text += "torrent_id=\"链接\" downloader=\"qb\"\n\n"
             else:
                 # 显示找到的下载器
                 for i, downloader in enumerate(downloaders):
-                    if isinstance(downloader, dict):
-                        name = downloader.get("name", "未知")
-                        type_name = downloader.get("type", "未知")
-                        is_online = downloader.get("status", True)
-                        status = "在线" if is_online else "离线"
-
-                        result_text += f"{i+1}. {name} ({type_name})\n"
-                        result_text += f"   状态: {status}\n"
-                        result_text += "   使用命令: download-torrent "
-                        result_text += "torrent_id=\"链接\" "
-                        result_text += f"downloader=\"{name}\"\n\n"
-                    else:
-                        result_text += f"{i+1}. {str(downloader)}\n\n"
-
+                    name = downloader.get("name", "未知")
+                    type_name = downloader.get("type", "未知")
+                    result_text += f"{i+1}. {name} ({type_name})\n"
             return [
                 types.TextContent(
                     type="text",
@@ -678,7 +627,7 @@ class MovieDownloadTool(BaseTool):
                 description="下载指定的种子资源",
                 inputSchema={
                     "type": "object",
-                    "required": ["torrent_id"],
+                    "required": ["torrent_id", "media_type"],
                     "properties": {
                         "torrent_id": {
                             "type": "string",
@@ -691,6 +640,10 @@ class MovieDownloadTool(BaseTool):
                         "save_path": {
                             "type": "string",
                             "description": "保存路径"
+                        },
+                        "media_type": {
+                            "type": "string",
+                            "description": "电影 or 电视剧"
                         },
                         "is_paused": {
                             "type": "boolean",
