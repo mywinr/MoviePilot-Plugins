@@ -16,6 +16,8 @@ class MovieDownloadTool(BaseTool):
         """执行工具逻辑"""
         if tool_name == "search-movie":
             return await self._search_movie(arguments)
+        elif tool_name == "fuzzy-search-movie":
+            return await self._fuzzy_search_movie(arguments)
         elif tool_name == "download-torrent":
             return await self._download_torrent(arguments)
         elif tool_name == "get-downloaders":
@@ -27,6 +29,151 @@ class MovieDownloadTool(BaseTool):
                     text=f"错误：未知的工具 '{tool_name}'"
                 )
             ]
+
+    def _format_search_results(self, torrents: list, keyword: str, year: str = None, detailed: bool = True) -> str:
+        """
+        格式化搜索结果
+
+        参数:
+            torrents: 种子列表
+            keyword: 搜索关键词
+            year: 年份(可选)
+            detailed: 是否显示详细信息(默认为True)
+
+        返回:
+            格式化后的文本
+        """
+        if not torrents:
+            return f"未找到符合条件的资源：{keyword} {year or ''}"
+
+        # 格式化搜索结果
+        result_text = f"找到 {len(torrents)} 个资源：\n\n"
+        for i, torrent in enumerate(torrents):
+            # 检查torrent是否是字典类型
+            if not isinstance(torrent, dict):
+                logger.warning(f"种子数据不是字典类型: {type(torrent)}")
+                continue
+
+            # 提取需要的信息
+            # 检查torrent_info字段
+            torrent_info = torrent.get("torrent_info", {})
+            meta_info = torrent.get("meta_info", {})
+            if not torrent_info:
+                # 可能是Context对象的直接序列化
+                torrent_info = torrent
+
+            # 从torrent_info中提取数据
+            title = torrent_info.get("description", "未知标题")
+            if not title or title == "未知标题":
+                # 尝试从meta_info中获取标题
+                if meta_info:
+                    title = meta_info.get("subtitle", "未知标题")
+
+            site_name = torrent_info.get("site_name", "未知站点")
+
+            # 处理大小显示
+            size_bytes = torrent_info.get("size", 0)
+            if isinstance(size_bytes, (int, float)) and size_bytes > 0:
+                # 转换为人类可读的大小
+                if size_bytes < 1024:
+                    size = f"{size_bytes} B"
+                elif size_bytes < 1024 * 1024:
+                    size = f"{size_bytes/1024:.2f} KB"
+                elif size_bytes < 1024 * 1024 * 1024:
+                    size = f"{size_bytes/(1024*1024):.2f} MB"
+                else:
+                    size = f"{size_bytes/(1024*1024*1024):.2f} GB"
+            else:
+                size = torrent_info.get("size", "未知大小")
+
+            # 提取分辨率
+            resolution = "未知分辨率"
+            if meta_info:
+                # 尝试直接从标题中提取分辨率
+                title_str = meta_info.get("org_string", "")
+                if title_str:
+                    import re
+                    res_pattern = (
+                        r'(4K|1080[pi]|720[pi]|2160[pi]|UHD|'
+                        r'MINIBD1080P|BD1080P|HD1080P|BD720P|HD720P)'
+                    )
+                    res_match = re.search(
+                        res_pattern, title_str, re.IGNORECASE)
+                    if res_match:
+                        resolution = res_match.group(1)
+
+            seeders = torrent_info.get("seeders", 0)
+            peers = torrent_info.get("peers", 0)
+            torrent_url = torrent_info.get("enclosure", "")
+
+            # 格式化资源信息
+            result_text += f"{i+1}. {title}\n"
+            result_text += f"   站点: {site_name} | 大小: {size}\n"
+            result_text += f"   分辨率: {resolution}\n"
+            result_text += f"   做种: {seeders} | 下载: {peers}\n"
+
+            # 如果需要详细信息，添加更多字段
+            if detailed:
+                # 是否H&R
+                is_hr = torrent_info.get("hit_and_run", False)
+                # 打折
+                discount = torrent_info.get("volume_factor", 0)
+
+                # 提取视频编码
+                video_encode = meta_info.get("video_encode", "未知编码")
+                # 提取音频编码
+                audio_encode = meta_info.get("audio_encode", "未知音频")
+                # 提取资源类型
+                resource_type = meta_info.get("resource_type", "未知来源")
+                # 提取制作组/字幕组
+                resource_team = meta_info.get("resource_team", "")
+
+                # 提取字幕信息
+                subtitle_info = "无字幕信息"
+                description = torrent_info.get("description", "")
+                if description:
+                    # 检查是否包含字幕信息
+                    subtitle_keywords = [
+                        "中字", "中文字幕", "简体", "繁体",
+                        "双语", "特效字幕", "SUP", "SRT", "ASS"
+                    ]
+                    subtitle_matches = []
+                    for keyword in subtitle_keywords:
+                        if keyword in description:
+                            subtitle_matches.append(keyword)
+
+                    if subtitle_matches:
+                        subtitle_info = "、".join(subtitle_matches)
+
+                # 提取音轨信息
+                audio_info = "未知音轨"
+                audio_keywords = ["国语", "粤语", "英语", "双语", "多语", "国英双语", "中英双语"]
+                audio_matches = []
+                for keyword in audio_keywords:
+                    if keyword in description:
+                        audio_matches.append(keyword)
+
+                if audio_matches:
+                    audio_info = "、".join(audio_matches)
+
+                # 添加详细信息
+                result_text += (
+                    f"   视频编码: {video_encode} | "
+                    f"音频编码: {audio_encode}\n"
+                )
+                result_text += f"   资源类型: {resource_type}"
+                if resource_team:
+                    result_text += f" | 制作组: {resource_team}"
+                result_text += "\n"
+                result_text += f"   字幕: {subtitle_info} | 音轨: {audio_info}\n"
+                if is_hr:
+                    result_text += "   H&R: 是\n"
+                result_text += f"   折扣: {discount}\n"
+
+            # 添加资源下载链接
+            result_text += f"   资源下载链接: {torrent_url}\n\n"
+
+        return result_text
 
     async def _search_movie(self, arguments: dict) -> list[types.TextContent]:
         """
@@ -81,56 +228,10 @@ class MovieDownloadTool(BaseTool):
             # 搜索资源
             params = {
                 "mediaid": media_id,
-                "mtype": "电影" if media_type == "电影" else "电视剧"
+                "mtype": "电影" if media_type == "电影" else "电视剧",
+                "sites": sites,
+                "sort": "seeders"
             }
-
-            # 添加可选参数
-            if sites:
-                # 尝试获取站点信息，将站点名称转换为站点ID
-                try:
-                    sites_info = await self._get_sites_info()
-                    if sites_info:
-                        # 如果用户提供的是站点名称而不是ID，尝试转换
-                        site_ids = []
-                        site_names = [s.strip() for s in sites.split(',')]
-
-                        for site_name in site_names:
-                            # 尝试直接使用站点名称
-                            site_found = False
-                            for site in sites_info:
-                                if isinstance(site, dict):
-                                    # 检查站点名称或别名是否匹配
-                                    site_name_lower = site_name.lower()
-                                    site_name_db = site.get('name', '').lower()
-                                    site_id_db = site.get('id', '').lower()
-                                    name_match = (
-                                        site_name_db == site_name_lower
-                                    )
-                                    id_match = site_id_db == site_name_lower
-                                    if name_match or id_match:
-                                        site_ids.append(site.get('id', ''))
-                                        site_found = True
-                                        break
-
-                            # 如果没找到匹配的站点，仍然添加原始名称
-                            if not site_found:
-                                site_ids.append(site_name)
-
-                        # 更新参数
-                        if site_ids:
-                            params["sites"] = ','.join(site_ids)
-                        else:
-                            params["sites"] = sites
-                    else:
-                        # 如果无法获取站点信息，使用原始站点参数
-                        params["sites"] = sites
-                except Exception as e:
-                    logger.warning(f"处理站点参数时出错: {str(e)}")
-                    # 出错时仍使用原始站点参数
-                    params["sites"] = sites
-
-            # 记录搜索参数
-            logger.info(f"搜索参数: {json.dumps(params, ensure_ascii=False)}")
 
             # 调用搜索API
             try:
@@ -139,10 +240,6 @@ class MovieDownloadTool(BaseTool):
                     endpoint=f"/api/v1/search/media/{media_id}",
                     params=params
                 )
-
-                # 记录完整响应以便调试
-                response_json = json.dumps(response, ensure_ascii=False)
-                logger.info(f"搜索API响应: {response_json}")
             except Exception as e:
                 logger.error(f"调用搜索API时出错: {str(e)}")
                 return [
@@ -168,160 +265,8 @@ class MovieDownloadTool(BaseTool):
             # 获取搜索结果
             torrents = response.get("data", [])
 
-            # 记录种子数据结构
-            if not torrents:
-                return [
-                    types.TextContent(
-                        type="text",
-                        text=f"未找到符合条件的资源：{keyword} {year or ''}"
-                    )
-                ]
-
-            # 格式化搜索结果
-            result_text = f"找到 {len(torrents)} 个资源：\n\n"
-            for i, torrent in enumerate(torrents):
-                # 检查torrent是否是字典类型
-                if not isinstance(torrent, dict):
-                    logger.warning(f"种子数据不是字典类型: {type(torrent)}")
-                    continue
-
-                # 提取需要的信息
-                # 检查torrent_info字段
-                torrent_info = torrent.get("torrent_info", {})
-                if not torrent_info and "meta_info" in torrent:
-                    # 可能是Context对象的直接序列化
-                    torrent_info = torrent
-
-                # 从torrent_info中提取数据
-                title = torrent_info.get("title", "未知标题")
-                if not title or title == "未知标题":
-                    # 尝试从meta_info中获取标题
-                    meta_info = torrent.get("meta_info", {})
-                    if meta_info:
-                        title = meta_info.get("title", "未知标题")
-
-                site_name = torrent_info.get("site_name", "未知站点")
-
-                # 处理大小显示
-                size_bytes = torrent_info.get("size", 0)
-                if isinstance(size_bytes, (int, float)) and size_bytes > 0:
-                    # 转换为人类可读的大小
-                    if size_bytes < 1024:
-                        size = f"{size_bytes} B"
-                    elif size_bytes < 1024 * 1024:
-                        size = f"{size_bytes/1024:.2f} KB"
-                    elif size_bytes < 1024 * 1024 * 1024:
-                        size = f"{size_bytes/(1024*1024):.2f} MB"
-                    else:
-                        size = f"{size_bytes/(1024*1024*1024):.2f} GB"
-                else:
-                    size = torrent_info.get("size", "未知大小")
-
-                # 从meta_info中提取更多信息
-                meta_info = torrent.get("meta_info", {})
-
-                # 提取分辨率
-                resolution = "未知分辨率"
-                if meta_info:
-                    # 尝试直接从标题中提取分辨率
-                    title_str = meta_info.get("org_string", "")
-                    if title_str:
-                        import re
-                        # 合并分辨率模式为一个正则表达式，提高效率
-                        res_pattern = (
-                            r'(4K|1080[pi]|720[pi]|2160[pi]|UHD|'
-                            r'MINIBD1080P|BD1080P|HD1080P|BD720P|HD720P)'
-                        )
-                        res_match = re.search(
-                            res_pattern, title_str, re.IGNORECASE)
-                        if res_match:
-                            resolution = res_match.group(1)
-
-                # 提取视频编码
-                video_encode = meta_info.get("video_encode", "未知编码")
-
-                # 提取音频编码
-                audio_encode = meta_info.get("audio_encode", "未知音频")
-
-                # 提取资源类型
-                resource_type = meta_info.get("resource_type", "未知来源")
-
-                # 提取制作组/字幕组
-                resource_team = meta_info.get("resource_team", "")
-
-                # 提取字幕信息
-                subtitle_info = "无字幕信息"
-                description = torrent_info.get("description", "")
-                if description:
-                    # 检查是否包含字幕信息
-                    subtitle_keywords = [
-                        "中字", "中文字幕", "简体", "繁体",
-                        "双语", "特效字幕", "SUP", "SRT", "ASS"
-                    ]
-                    subtitle_matches = []
-                    for keyword in subtitle_keywords:
-                        if keyword in description:
-                            subtitle_matches.append(keyword)
-
-                    if subtitle_matches:
-                        subtitle_info = "、".join(subtitle_matches)
-
-                # 提取音轨信息
-                audio_info = "未知音轨"
-                audio_keywords = ["国语", "粤语", "英语", "双语", "多语", "国英双语", "中英双语"]
-                audio_matches = []
-                for keyword in audio_keywords:
-                    if keyword in description:
-                        audio_matches.append(keyword)
-
-                if audio_matches:
-                    audio_info = "、".join(audio_matches)
-
-                seeders = torrent_info.get("seeders", 0)
-                peers = torrent_info.get("peers", 0)
-
-                # 获取资源ID
-                torrent_id = torrent_info.get("id")
-                if not torrent_id:
-                    # 尝试使用enclosure作为ID
-                    torrent_id = torrent_info.get("enclosure")
-
-                # 获取下载链接
-                download_link = torrent_info.get("enclosure", "")
-
-                # 格式化资源信息
-                result_text += f"{i+1}. {title}\n"
-                result_text += f"   站点: {site_name} | 大小: {size}\n"
-                result_text += (
-                    f"   分辨率: {resolution} | "
-                    f"视频编码: {video_encode} | "
-                    f"音频编码: {audio_encode}\n"
-                )
-                result_text += f"   资源类型: {resource_type}"
-                if resource_team:
-                    result_text += f" | 制作组: {resource_team}"
-                result_text += "\n"
-                result_text += f"   字幕: {subtitle_info} | 音轨: {audio_info}\n"
-                result_text += f"   做种: {seeders} | 下载: {peers}\n"
-
-                # 添加资源ID和下载链接
-                result_text += f"   资源ID: {torrent_id}\n"
-                if download_link:
-                    # 截断过长的下载链接
-                    short_link = download_link
-                    if len(short_link) > 60:
-                        short_link = short_link[:57] + "..."
-                    result_text += f"   下载链接: {short_link}\n"
-
-                    # 添加下载命令提示
-                    result_text += (
-                        f"   下载命令: download-torrent "
-                        f"torrent_id=\"{download_link}\""
-                    )
-                    result_text += "\n"
-                result_text += "\n"
-
-            result_text += "要下载资源，请复制上面的下载命令或使用 download-torrent 工具并提供下载链接。"
+            # 使用公共方法格式化结果
+            result_text = self._format_search_results(torrents, keyword, year, detailed=True)
 
             return [
                 types.TextContent(
@@ -345,12 +290,11 @@ class MovieDownloadTool(BaseTool):
         """
         下载指定的种子资源
         参数:
-            - torrent_id: 种子资源ID或下载链接
+            - torrent_url: 种子资源下载链接
             - downloader: 下载器名称(可选)
             - save_path: 保存路径(可选)
-            - is_paused: 是否暂停下载(可选)
         """
-        torrent_url = arguments.get("torrent_id")
+        torrent_url = arguments.get("torrent_url")
         if not torrent_url:
             return [
                 types.TextContent(
@@ -362,7 +306,6 @@ class MovieDownloadTool(BaseTool):
         # 获取其他可选参数
         downloader = arguments.get("downloader")
         save_path = arguments.get("save_path")
-        is_paused = arguments.get("is_paused", False)
 
         try:
             logger.info(f"开始下载资源，URL: {torrent_url}")
@@ -396,8 +339,6 @@ class MovieDownloadTool(BaseTool):
             # 添加其他可选参数
             if save_path:
                 payload["save_path"] = save_path
-            if is_paused:
-                payload["is_paused"] = is_paused
 
             # 调用mcpserver的下载API
             response = await self._make_request(
@@ -407,7 +348,7 @@ class MovieDownloadTool(BaseTool):
             )
 
             # 记录响应
-            logger.info(f"下载API响应: {json.dumps(response, ensure_ascii=False)}")
+            # logger.info(f"下载API响应: {json.dumps(response, ensure_ascii=False)}")
 
             # 检查是否有错误
             is_error = (
@@ -537,6 +478,85 @@ class MovieDownloadTool(BaseTool):
             logger.warning(f"获取站点信息失败: {str(e)}")
             return []
 
+    async def _fuzzy_search_movie(self, arguments: dict) -> list[types.TextContent]:
+        """
+        模糊搜索电影资源，不需要精确的媒体名称
+        参数:
+            - keyword: 电影名称关键词
+            - page: 页码(可选)，默认为0
+            - sites: 站点ID列表(可选)，多个站点ID用逗号分隔
+            - detailed: 是否显示详细信息(可选)，默认为False
+        """
+        keyword = arguments.get("keyword")
+        if not keyword:
+            return [
+                types.TextContent(
+                    type="text",
+                    text="错误：请提供搜索关键词"
+                )
+            ]
+
+        # 获取其他可选参数
+        page = arguments.get("page", 0)
+        sites = arguments.get("sites")
+        detailed = arguments.get("detailed", False)
+
+        try:
+            logger.info(f"开始模糊搜索资源，关键词：{keyword}")
+
+            # 构建请求参数
+            params = {
+                "keyword": keyword,
+                "page": page
+            }
+
+            if sites:
+                params["sites"] = sites
+
+            # 调用模糊搜索API
+            response = await self._make_request(
+                method="GET",
+                endpoint="/api/v1/search/title",
+                params=params
+            )
+
+            # 检查是否有错误
+            is_error_response = (
+                isinstance(response, dict) and
+                not response.get("success", False)
+            )
+
+            if is_error_response:
+                error_msg = response.get("message", "未知错误")
+                return [
+                    types.TextContent(
+                        type="text",
+                        text=f"模糊搜索资源失败: {error_msg}"
+                    )
+                ]
+
+            # 获取搜索结果
+            torrents = response.get("data", [])
+
+            # 使用公共方法格式化结果
+            result_text = self._format_search_results(torrents, keyword, detailed=detailed)
+
+            return [
+                types.TextContent(
+                    type="text",
+                    text=result_text
+                )
+            ]
+
+        except Exception as e:
+            logger.error(f"模糊搜索资源时出错: {str(e)}")
+            return [
+                types.TextContent(
+                    type="text",
+                    text=f"模糊搜索资源时出错: {str(e)}"
+                )
+            ]
+
     async def _get_downloaders(
         self, _: dict = None
     ) -> list[types.TextContent]:
@@ -563,7 +583,7 @@ class MovieDownloadTool(BaseTool):
                 for i, downloader in enumerate(downloaders):
                     name = downloader.get("name", "未知")
                     type_name = downloader.get("type", "未知")
-                    result_text += f"{i+1}. {name} ({type_name})\n"
+                    result_text += f"{i+1}. name: {name}, type: {type_name}\n"
             return [
                 types.TextContent(
                     type="text",
@@ -586,7 +606,7 @@ class MovieDownloadTool(BaseTool):
         return [
             types.Tool(
                 name="search-movie",
-                description="搜索电影资源，支持按名称、年份、清晰度等条件搜索",
+                description="搜索电影资源，支持按名称、年份、清晰度等条件搜索，若有指定站点则从指定站点搜索，如果没有指定站点则依次从所有站点搜索，直到找到符合要求的资源",
                 inputSchema={
                     "type": "object",
                     "required": ["keyword"],
@@ -609,7 +629,33 @@ class MovieDownloadTool(BaseTool):
                         },
                         "sites": {
                             "type": "string",
-                            "description": "站点ID列表，多个站点ID用逗号分隔"
+                            "description": "站点ID列表，多个站点ID用逗号分隔，是数字ID不是站点名称，若没有站点ID可以通过工具get-sites获取"
+                        }
+                    },
+                },
+            ),
+            types.Tool(
+                name="fuzzy-search-movie",
+                description="模糊搜索电影资源，当精确搜索无法识别媒体信息时使用此工具。直接在站点中搜索关键词，不需要精确的媒体名称",
+                inputSchema={
+                    "type": "object",
+                    "required": ["keyword"],
+                    "properties": {
+                        "keyword": {
+                            "type": "string",
+                            "description": "搜索关键词，模糊的影视名字"
+                        },
+                        "page": {
+                            "type": "integer",
+                            "description": "页码，默认为0"
+                        },
+                        "sites": {
+                            "type": "string",
+                            "description": "站点ID列表，多个站点ID用逗号分隔，是数字ID不是站点名称，若没有站点ID可以通过工具get-sites获取"
+                        },
+                        "detailed": {
+                            "type": "boolean",
+                            "description": "是否显示详细信息，默认为false，设置为true会显示更多资源详情"
                         }
                     },
                 },
@@ -624,12 +670,12 @@ class MovieDownloadTool(BaseTool):
             ),
             types.Tool(
                 name="download-torrent",
-                description="下载指定的种子资源",
+                description="下载指定的种子资源，用户如果未指定保存路径则save_path留空",
                 inputSchema={
                     "type": "object",
-                    "required": ["torrent_id", "media_type"],
+                    "required": ["torrent_url", "media_type"],
                     "properties": {
-                        "torrent_id": {
+                        "torrent_url": {
                             "type": "string",
                             "description": "要下载的种子资源链接"
                         },
@@ -644,10 +690,6 @@ class MovieDownloadTool(BaseTool):
                         "media_type": {
                             "type": "string",
                             "description": "电影 or 电视剧"
-                        },
-                        "is_paused": {
-                            "type": "boolean",
-                            "description": "是否暂停下载"
                         }
                     },
                 },

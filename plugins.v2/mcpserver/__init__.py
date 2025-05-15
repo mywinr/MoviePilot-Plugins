@@ -75,12 +75,11 @@ class MCPServer(_PluginBase):
     _python_bin = None
     _health_check_url = None
     _server_script_path = None
-
+    _downloader_helper = DownloaderHelper()
     def init_plugin(self, config: dict = None):
         """初始化插件"""
         if not config:
             return
-
         self._enable = config.get('enable', False)
         self._config.update(config.get('config', {}))
 
@@ -1376,7 +1375,6 @@ class MCPServer(_PluginBase):
             torrent_url = body.get("torrent_url")
             downloader = body.get("downloader")
             save_path = body.get("save_path")
-            is_paused = body.get("is_paused", False)
             if save_path is None:
                 # get default path based on media type
                 default_paths = DirectoryHelper().get_local_download_dirs()
@@ -1410,7 +1408,6 @@ class MCPServer(_PluginBase):
 
             # 初始化辅助类
             site_oper = SiteOper()
-            downloader_helper = DownloaderHelper()
 
             # 获取种子对应站点cookie
             domain = StringUtils.get_url_domain(torrent_url)
@@ -1429,7 +1426,7 @@ class MCPServer(_PluginBase):
                 }
 
             # 获取下载器服务
-            service = downloader_helper.get_service(downloader)
+            service = self._downloader_helper.get_service(downloader)
             if not service or not service.instance:
                 return {
                     "success": False,
@@ -1444,36 +1441,34 @@ class MCPServer(_PluginBase):
 
             # 添加下载任务
             downloader_instance = service.instance
+            download_id = None
+            cookie = site.cookie if site.cookie else None
+            if self._downloader_helper.is_downloader("qbittorrent", service=service):
+                torrent = downloader_instance.add_torrent(content=torrent_url,
+                                                download_dir=save_path,
+                                                is_paused=False,
+                                                cookie=cookie,
+                                                tag=[settings.TORRENT_TAG, site.name])
+                if torrent:
+                    download_id = torrent
+            elif self._downloader_helper.is_downloader("transmission", service=service):
+                torrent = downloader_instance.add_torrent(content=torrent_url,
+                                                download_dir=save_path,
+                                                is_paused=False,
+                                                cookie=cookie,
+                                                labels=[settings.TORRENT_TAG, site.name])
+                if torrent:
+                    download_id = torrent.hashString
 
-            # 添加下载任务
-            torrent = downloader_instance.add_torrent(
-                content=torrent_url,
-                download_dir=save_path,
-                is_paused=is_paused,
-                cookie=site.cookie
-            )
-
-            if not torrent:
+            if not download_id:
                 return {
                     "success": False,
                     "message": "添加下载任务失败"
                 }
 
-            # 根据下载器类型处理返回值
-            if downloader_helper.is_downloader("qbittorrent", service=service):
-                download_id = torrent
-            elif downloader_helper.is_downloader(
-                "transmission", service=service
-            ):
-                download_id = torrent.hashString
-            else:
-                # 尝试获取通用ID
-                download_id = getattr(torrent, "id", str(torrent))
-
             return {
                 "success": True,
                 "message": "种子添加下载成功",
-                "download_id": download_id,
                 "site": site.name,
                 "save_path": save_path
             }
