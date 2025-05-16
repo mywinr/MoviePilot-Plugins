@@ -1,6 +1,6 @@
-# MoviePilot插件使用手册
+# MCP Server使用手册
 
-## MCP Server
+## 插件介绍
 
 MCP Server 是一个为 MoviePilot 提供大语言模型服务的插件，它通过启动一个本地服务器，使用户能够通过自然语言与 MoviePilot 进行交互，实现电影资源的搜索、下载、订阅等功能。
 
@@ -57,6 +57,15 @@ MCP Server 提供了多种工具，可以通过大语言模型调用：
 - **get-subscribe-detail**：获取订阅详情
 - **update-subscribe**：更新订阅信息
 - **get-subscribe-by-media**：通过媒体 ID 获取订阅信息
+
+
+### 客户端配置示例
+
+#### Cherry Studio
+
+目前仅在Cherry Studio上测试过：
+
+![Cherry Studio配置示例](./assets/cherry_studio.png)
 
 ## 使用示例
 

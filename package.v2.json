@@ -26,14 +26,16 @@
     },
     "MCPServer": {
         "name": "MCP Server",
-        "description": "启动MCP服务器实现大模型操作MoviePilot",
-        "labels": "MCP",
-        "version": "1.0",
-        "icon": "https://avatars.githubusercontent.com/u/182288589?s=200&v=4",
+        "description": "使用MCP客户端通过大模型来操作MoviePilot",
+        "labels": "系统设置",
+        "version": "1.1",
+        "icon": "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/mcp.png",
         "author": "DzAvril",
         "level": 1,
+        "v2": true,
         "history": {
-            "v1.0": "新增"
+            "v1.1": "增加订阅相关工具",
+            "v1.0": "MCP server基础功能"
         }
     }
 }

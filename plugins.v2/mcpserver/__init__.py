@@ -39,7 +39,7 @@ class MCPServer(_PluginBase):
         "MoviePilot-Plugins/main/icons/mcp.png"
     )
     # 插件版本
-    plugin_version = "1.0"
+    plugin_version = "1.1"
     # 插件作者
     plugin_author = "DzAvril"
     # 作者主页
