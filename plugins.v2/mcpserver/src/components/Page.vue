@@ -72,7 +72,7 @@
                   <template v-slot:prepend>
                     <v-icon icon="mdi-link" color="info" size="small" />
                   </template>
-                  <v-list-item-title class="text-caption">服务地址</v-list-item-title>
+                  <v-list-item-title class="text-caption">监听地址</v-list-item-title>
                   <template v-slot:append>
                     <span class="text-caption">{{ serverStatus.url || '未知' }}</span>
                   </template>

@@ -68,7 +68,7 @@
                         </v-btn>
                       </template>
                     </v-tooltip>
-                    <v-tooltip text="重置API密钥">
+                    <v-tooltip text="生成新的API密钥">
                       <template v-slot:activator="{ props }">
                         <v-btn
                           v-bind="props"
@@ -79,7 +79,7 @@
                           :loading="resettingApiKey"
                           @click="resetApiKey"
                         >
-                          <v-icon>mdi-key-alert</v-icon>
+                          <v-icon>mdi-key-change</v-icon>
                         </v-btn>
                       </template>
                     </v-tooltip>

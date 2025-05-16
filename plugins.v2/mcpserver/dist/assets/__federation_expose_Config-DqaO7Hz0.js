@@ -467,7 +467,7 @@ return (_ctx, _cache) => {
                                 ]),
                                 _: 1
                               }),
-                              _createVNode(_component_v_tooltip, { text: "重置API密钥" }, {
+                              _createVNode(_component_v_tooltip, { text: "生成新的API密钥" }, {
                                 activator: _withCtx(({ props }) => [
                                   _createVNode(_component_v_btn, _mergeProps(props, {
                                     icon: "",
@@ -480,7 +480,7 @@ return (_ctx, _cache) => {
                                     default: _withCtx(() => [
                                       _createVNode(_component_v_icon, null, {
                                         default: _withCtx(() => _cache[11] || (_cache[11] = [
-                                          _createTextVNode("mdi-key-alert")
+                                          _createTextVNode("mdi-key-change")
                                         ])),
                                         _: 1
                                       })
@@ -595,6 +595,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const ConfigComponent = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-16bc76e6"]]);
+const ConfigComponent = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-903968ef"]]);
 
 export { ConfigComponent as default };

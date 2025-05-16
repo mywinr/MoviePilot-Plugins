@@ -1,42 +1,111 @@
-# MoviePilot 插件远程组件示例
+# MoviePilot插件使用手册
 
-这是 MoviePilot 插件远程组件的示例项目，展示了如何正确配置和开发与主应用兼容的远程组件。本示例实现了三个标准组件：Page（详情页面）、Config（配置页面）和Dashboard（仪表板组件）。
+## MCP Server
 
-## 1. 开发环境准备
+MCP Server 是一个为 MoviePilot 提供大语言模型服务的插件，它通过启动一个本地服务器，使用户能够通过自然语言与 MoviePilot 进行交互，实现电影资源的搜索、下载、订阅等功能。
 
-### 安装依赖
+## 功能特点
 
-```bash
-npm install
-# 或
-yarn
+- **自然语言交互**：通过大语言模型理解用户意图，执行相应操作
+- **电影资源搜索**：根据电影名称、年份、分辨率等条件搜索资源
+- **资源下载**：支持下载找到的电影资源，并在下载前进行确认
+- **资源订阅**：支持订阅电影、电视剧资源，自动追踪更新
+- **媒体识别**：智能识别用户提供的模糊媒体信息，转换为准确的媒体数据
+- **智能建议**：自动检查和纠正电影名称错误
+
+## 安装与配置
+
+1. 在 MoviePilot 插件市场中安装 MCP Server 插件
+2. 启用插件后，进入插件配置页面
+3. 配置以下参数：
+   - **用户名/密码**：用于获取 MoviePilot 的访问令牌
+   - **API 密钥（自动生成）**：用于与 MCP Server 通信的密钥
+
+## 使用方法
+
+### 启动服务器
+
+1. 在插件页面中，确保插件已启用
+2. 点击"启动服务器"按钮启动 MCP Server
+3. 服务器状态会显示在页面上，包括运行状态和端口信息
+
+### 使用工具
+
+MCP Server 提供了多种工具，可以通过大语言模型调用：
+
+#### 媒体识别工具
+
+- **recognize-media**：识别电影/电视剧信息，获取 TMDB ID、豆瓣 ID 等
+- **get-media-prompt**：获取媒体识别的处理指南
+
+#### 资源搜索工具
+
+- **search-movie**：搜索电影资源
+- **search-tv**：搜索电视剧资源
+- **search-anime**：搜索动漫资源
+
+#### 资源下载工具
+
+- **download-resource**：下载指定的资源
+- **confirm-download**：确认下载操作
+
+#### 订阅管理工具
+
+- **list-subscribes**：获取所有订阅资源列表
+- **add-subscribe**：添加新的订阅
+- **delete-subscribe**：删除指定的订阅
+- **get-subscribe-detail**：获取订阅详情
+- **update-subscribe**：更新订阅信息
+- **get-subscribe-by-media**：通过媒体 ID 获取订阅信息
+
+## 使用示例
+
+### 搜索电影资源
+
+```
+请帮我搜索电影《星际穿越》，要求4K分辨率
 ```
 
-### 开发模式运行
-
-```bash
-npm run dev
-# 或
-yarn dev
-```
-
-## 2. 项目结构
+### 下载电影资源
 
 ```
-plugin-component/
-├── src/
-│   ├── components/
-│   │   ├── Page.vue       # 插件详情页面组件
-│   │   ├── Config.vue     # 插件配置页面组件
-│   │   └── Dashboard.vue  # 插件仪表板组件
-│   ├── App.vue            # 本地开发入口组件
-│   └── main.js            # 本地开发入口文件
-├── vite.config.js         # Vite和模块联邦配置
-├── index.html             # 本地开发HTML入口
-└── package.json           # 依赖配置
+请下载《流浪地球2》，要求1080P，优先选择国语配音版本
 ```
 
-## 3. 开发指引
+### 添加订阅
 
-- [模块联邦开发指南](../../docs/module-federation-guide.md)
-- [模块联邦问题排查指南](../../docs/federation-troubleshooting.md)。
+```
+请订阅《权力的游戏》第8季
+```
+
+### 查看订阅列表
+
+```
+请列出我当前所有的订阅
+```
+
+## 常见问题
+
+### 服务器无法启动
+
+- 检查用户名/密码是否正确
+- 确认 API 密钥已正确配置
+- 查看日志获取详细错误信息
+
+### 资源搜索失败
+
+- 尝试提供更准确的电影名称和年份
+- 检查是否有可用的站点配置
+- 尝试使用 TMDB ID 或豆瓣 ID 进行搜索
+
+### 订阅更新失败
+
+- 检查订阅 ID 是否正确
+- 确认要更新的字段格式正确
+- 使用 `get-subscribe-detail` 工具查看当前订阅详情
+
+## 技术支持
+
+如有任何问题或建议，请通过以下方式联系：
+
+- GitHub Issues: [MoviePilot-Plugins](https://github.com/DzAvril/MoviePilot-Plugins)

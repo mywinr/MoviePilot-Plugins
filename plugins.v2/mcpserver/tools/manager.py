@@ -7,6 +7,8 @@ from .user.info import UserInfoTool
 from .site.sites import GetSitesTool
 from .media.subscribe import SubscribeTool
 from .media.download import MovieDownloadTool
+from .media.recognize import MediaRecognizeTool
+from .prompt.media_prompt import MediaPromptTool
 
 
 # Configure logging
@@ -27,7 +29,9 @@ class ToolManager:
             UserInfoTool,
             GetSitesTool,
             SubscribeTool,
-            MovieDownloadTool
+            MovieDownloadTool,
+            MediaRecognizeTool,
+            MediaPromptTool
         ]
 
         for tool_class in tools:

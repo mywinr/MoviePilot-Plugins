@@ -1,8 +1,8 @@
 import json
 import logging
-import anyio
 import mcp.types as types
 from ..base import BaseTool
+from .recognize import MediaRecognizeTool
 
 
 # Configure logging
@@ -11,6 +11,11 @@ logger = logging.getLogger(__name__)
 
 class MovieDownloadTool(BaseTool):
     """电影搜索和下载工具"""
+
+    def __init__(self, token_manager=None):
+        super().__init__(token_manager)
+        # 创建媒体识别工具实例
+        self._recognize_tool = MediaRecognizeTool(token_manager)
 
     async def execute(self, tool_name: str, arguments: dict) -> list[types.TextContent | types.ImageContent]:
         """执行工具逻辑"""
@@ -201,7 +206,7 @@ class MovieDownloadTool(BaseTool):
 
         try:
             # 首先识别媒体信息
-            media_info = await self._recognize_media(keyword, year, media_type)
+            media_info = await self._recognize_tool.recognize_media(keyword, year, media_type)
             if not media_info:
                 return [
                     types.TextContent(
@@ -328,7 +333,6 @@ class MovieDownloadTool(BaseTool):
                             logger.info(f"自动选择下载器: {downloader}")
                             break
 
-
             # 准备请求参数
             payload = {
                 "torrent_url": torrent_url,
@@ -385,79 +389,6 @@ class MovieDownloadTool(BaseTool):
                     text=f"下载资源时出错: {str(e)}"
                 )
             ]
-
-    async def _recognize_media(self, title, year=None, _=None):
-        """
-        识别媒体信息
-
-        参数:
-            title: 媒体标题
-            year: 年份（可选）
-            _: 媒体类型（未使用）
-        """
-        params = {"title": title}
-        if year:
-            params["year"] = year
-
-        try:
-            logger.info(f"识别媒体信息: {title} {year or ''}")
-
-            # 增加重试机制
-            max_retries = 3
-            retry_delay = 2  # 秒
-
-            for retry in range(max_retries):
-                try:
-                    response = await self._make_request(
-                        method="GET",
-                        endpoint="/api/v1/media/recognize",
-                        params=params
-                    )
-
-                    # 检查响应是否包含错误
-                    if response and isinstance(response, dict):
-                        if "error" in response:
-                            error_msg = response.get("error", "未知错误")
-                            logger.error(f"识别媒体信息失败: {error_msg}")
-
-                            # 如果不是最后一次重试，则等待后重试
-                            if retry < max_retries - 1:
-                                logger.info(
-                                    f"将在 {retry_delay} 秒后重试 "
-                                    f"({retry + 1}/{max_retries})")
-                                await anyio.sleep(retry_delay)
-                                retry_delay *= 2  # 指数退避
-                                continue
-                            return None
-
-                        # 成功获取媒体信息
-                        if "media_info" in response:
-                            logger.info(f"成功识别媒体: {title}")
-                            return response["media_info"]
-
-                    # 响应格式不正确
-                    logger.warning(f"媒体识别响应格式不正确: {response}")
-                    return None
-
-                except Exception as e:
-                    logger.error(f"识别媒体时发生异常: {str(e)}")
-
-                    # 如果不是最后一次重试，则等待后重试
-                    if retry < max_retries - 1:
-                        logger.info(
-                            f"将在 {retry_delay} 秒后重试 "
-                            f"({retry + 1}/{max_retries})")
-                        await anyio.sleep(retry_delay)
-                        retry_delay *= 2  # 指数退避
-                    else:
-                        logger.error(f"识别媒体失败，已达到最大重试次数: {title}")
-                        return None
-
-            return None
-
-        except Exception as e:
-            logger.error(f"识别媒体过程中发生错误: {str(e)}")
-            return None
 
     async def _get_sites_info(self):
         """获取所有站点信息"""
@@ -606,7 +537,7 @@ class MovieDownloadTool(BaseTool):
         return [
             types.Tool(
                 name="search-movie",
-                description="搜索电影资源，支持按名称、年份、清晰度等条件搜索，若有指定站点则从指定站点搜索，如果没有指定站点则依次从所有站点搜索，直到找到符合要求的资源",
+                description="搜索电影资源，支持按名称、年份、清晰度等条件搜索。处理用户模糊的搜索请求时，建议先调用get-media-prompt工具获取处理指南，再调用recognize-media工具识别媒体信息。",
                 inputSchema={
                     "type": "object",
                     "required": ["keyword"],
@@ -670,7 +601,7 @@ class MovieDownloadTool(BaseTool):
             ),
             types.Tool(
                 name="download-torrent",
-                description="下载指定的种子资源，用户如果未指定保存路径则save_path留空",
+                description="下载指定的种子资源。处理用户下载请求时，建议先调用get-media-prompt工具获取处理指南，再调用search-movie工具找到合适的资源。",
                 inputSchema={
                     "type": "object",
                     "required": ["torrent_url", "media_type"],

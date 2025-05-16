@@ -479,7 +479,7 @@ return (_ctx, _cache) => {
                                 default: _withCtx(() => [
                                   _createVNode(_component_v_list_item_title, { class: "text-caption" }, {
                                     default: _withCtx(() => _cache[6] || (_cache[6] = [
-                                      _createTextVNode("服务地址")
+                                      _createTextVNode("监听地址")
                                     ])),
                                     _: 1
                                   })
@@ -603,6 +603,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const PageComponent = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-73ec574d"]]);
+const PageComponent = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-780b3fba"]]);
 
 export { PageComponent as default };

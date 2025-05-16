@@ -76,6 +76,7 @@ class MCPServer(_PluginBase):
     _health_check_url = None
     _server_script_path = None
     _downloader_helper = DownloaderHelper()
+
     def init_plugin(self, config: dict = None):
         """初始化插件"""
         if not config:
@@ -719,6 +720,7 @@ class MCPServer(_PluginBase):
 
     def _get_server_status(self) -> Dict[str, Any]:
         """获取服务器详细状态"""
+        # 初始化状态信息
         status = {
             "running": False,
             "pid": None,
@@ -730,7 +732,12 @@ class MCPServer(_PluginBase):
             "requires_auth": True
         }
 
-        # 检查进程状态
+        # 设置服务URL
+        port = int(self._config["port"])
+        host = self._config["host"]
+        status["url"] = f"http://{host}:{port}/mcp"
+
+        # 检查内部进程引用
         process_running = False
         if self._server_process and self._server_process.poll() is None:
             process_running = True
@@ -738,123 +745,48 @@ class MCPServer(_PluginBase):
             status["pid"] = self._server_process.pid
             logger.info(f"内部进程引用检查: 服务器进程正在运行，PID: {self._server_process.pid}")
 
-        # 如果内部进程引用不存在或无效，尝试通过psutil查找进程
+        # 如果内部进程引用不存在，使用psutil查找进程
         if not process_running:
             try:
-                # 尝试使用psutil查找进程
                 import psutil
-                port = int(self._config["port"])
-                logger.info(f"尝试通过psutil查找占用端口 {port} 的进程")
 
-                for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
-                    try:
-                        # 检查是否是Python进程
-                        if "python" not in proc.name().lower() and "python" not in " ".join(proc.cmdline() or []).lower():
+                # 方法1: 通过端口查找进程
+                for conn in psutil.net_connections(kind='inet'):
+                    if conn.laddr.port == port and conn.status == 'LISTEN' and conn.pid:
+                        try:
+                            proc = psutil.Process(conn.pid)
+                            cmd_line = " ".join(proc.cmdline() or [])
+
+                            # 判断是否为MCP服务器进程
+                            if "python" in cmd_line.lower() and "server.py" in cmd_line:
+                                status["running"] = True
+                                status["pid"] = conn.pid
+                                process_running = True
+                                logger.info(
+                                    f"通过端口 {port} 找到服务器进程，PID: {conn.pid}")
+                                break
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
                             continue
 
-                        # 检查是否是server.py进程
-                        cmd_line = " ".join(proc.cmdline() or [])
-                        if "server.py" in cmd_line and f"--port {port}" in cmd_line:
-                            pid = proc.pid
-                            status["running"] = True
-                            status["pid"] = pid
-                            process_running = True
-                            logger.info(f"通过psutil找到服务器进程，PID: {pid}")
-                            break
-                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                        continue
-
-                # 如果没有通过进程名找到，尝试通过端口查找
+                # 方法2: 如果方法1未找到，通过进程名和命令行查找
                 if not process_running:
-                    try:
-                        # 获取所有网络连接
-                        connections = psutil.net_connections(kind='inet')
-
-                        # 查找占用指定端口的连接
-                        for conn in connections:
-                            if (hasattr(conn, 'laddr') and
-                                conn.laddr.port == port and
-                                conn.status == 'LISTEN' and
-                                    conn.pid):
-
-                                try:
-                                    proc = psutil.Process(conn.pid)
-                                    pid = proc.pid
-                                    cmd_line = " ".join(proc.cmdline() or [])
-
-                                    # 判断是否为MCP服务器进程
-                                    if "python" in cmd_line.lower() and "server.py" in cmd_line:
-                                        status["running"] = True
-                                        status["pid"] = pid
-                                        process_running = True
-                                        logger.info(
-                                            f"通过端口 {port} 找到服务器进程，PID: {pid}")
-                                        break
-                                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                                    continue
-                    except Exception as net_err:
-                        logger.error(f"通过网络连接查找进程失败: {net_err}")
-            except ImportError:
-                logger.warning("psutil模块未安装，尝试使用ps命令查找进程")
-                try:
-                    # 尝试使用ps命令查找server.py进程
-                    logger.info("通过ps命令查找server.py进程")
-                    import subprocess
-
-                    # 构建查找命令 - 查找包含server.py和端口号的进程
-                    port = self._config["port"]
-                    cmd = f"ps -ef | grep 'server.py.*--port {port}' | grep -v grep"
-
-                    # 执行命令
-                    result = subprocess.run(
-                        cmd, shell=True, capture_output=True, text=True)
-                    output = result.stdout.strip()
-
-                    if output:
-                        logger.info(f"找到server.py进程: {output}")
-                        # 解析PID
-                        parts = output.split()
-                        if len(parts) > 1:
-                            try:
-                                pid = int(parts[1])
+                    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                        try:
+                            cmd_line = " ".join(proc.cmdline() or [])
+                            if "python" in cmd_line.lower() and "server.py" in cmd_line and f"--port {port}" in cmd_line:
                                 status["running"] = True
-                                status["pid"] = pid
+                                status["pid"] = proc.pid
                                 process_running = True
-                                logger.info(f"通过ps命令确认服务器正在运行，PID: {pid}")
-                            except (ValueError, IndexError) as e:
-                                logger.error(f"解析PID失败: {e}")
-                    else:
-                        logger.info("未找到server.py进程")
-                except Exception as e:
-                    logger.error(f"使用ps命令查找进程失败: {e}")
-                    logger.error(traceback.format_exc())
+                                logger.info(f"通过命令行找到服务器进程，PID: {proc.pid}")
+                                break
+                        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                            continue
+            except ImportError:
+                logger.warning("psutil模块未安装，无法查找进程")
             except Exception as e:
-                logger.error(f"使用psutil查找进程失败: {e}")
-                logger.error(traceback.format_exc())
+                logger.error(f"使用psutil查找进程失败: {str(e)}")
 
-        # 设置服务URL
-        host = self._config['host']
-        port = self._config['port']
-        status["url"] = f"http://{host}:{port}/mcp"
-
-        # 尝试通过端口检查服务是否运行
-        if not process_running:
-            try:
-                # 创建一个socket连接测试端口是否被占用
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.settimeout(1)
-                result = s.connect_ex(('localhost', port))
-                s.close()
-
-                # 如果端口被占用，可能服务器正在运行
-                if result == 0:
-                    logger.info(f"端口 {port} 被占用，服务可能正在运行")
-                    status["running"] = True
-                    process_running = True
-            except Exception as socket_err:
-                logger.error(f"端口检查失败: {str(socket_err)}")
-
-        # 尝试进行健康检查
+        # 进行健康检查
         try:
             # 在请求中加入token
             headers = {}
@@ -862,50 +794,31 @@ class MCPServer(_PluginBase):
             if auth_token:
                 headers["Authorization"] = f"Bearer {auth_token}"
 
-            # 增加超时时间，避免网络波动导致误判
+            # 发送健康检查请求
             response = requests.get(
                 self._health_check_url,
                 headers=headers,
                 timeout=3
             )
 
-            # 记录响应状态码
-            logger.info(f"健康检查响应状态码: {response.status_code}")
-
             # MCP端点通常返回404或406
             health_ok = response.status_code in [404, 406]
             status["health"] = health_ok
 
-            # 如果健康检查通过，说明服务器一定在运行
+            # 如果健康检查通过，服务器一定在运行
             if health_ok:
                 status["running"] = True
                 logger.info(f"健康检查成功: 服务器运行中 (HTTP {response.status_code})")
-
-                # 如果进程引用丢失，尝试恢复
-                if not process_running:
-                    logger.warning("检测到服务器正在运行，但进程引用已丢失，尝试恢复...")
-                    # 尝试查找并恢复进程引用
-                    self._try_recover_process_reference(port)
-            else:
-                # 健康检查失败但返回了响应，可能是服务器正在启动或有其他问题
-                logger.warning(f"健康检查返回非预期状态码: {response.status_code}")
-
-                # 如果进程正在运行，我们仍然认为服务器是运行的
-                if process_running:
-                    status["running"] = True
-                    logger.info("虽然健康检查未通过，但进程正在运行，标记为运行状态")
         except requests.RequestException as e:
             logger.debug(f"健康检查请求失败: {str(e)}")
-            status["health"] = False
 
             # 如果进程正在运行，我们仍然认为服务器是运行的
             if process_running:
-                status["running"] = True
                 logger.info("虽然健康检查请求失败，但进程正在运行，标记为运行状态")
 
         # 最终状态日志
         logger.info(
-            "最终服务器状态: running=%s, health=%s, pid=%s",
+            "服务器状态: running=%s, health=%s, pid=%s",
             status['running'], status['health'], status['pid']
         )
         return status
@@ -1445,18 +1358,18 @@ class MCPServer(_PluginBase):
             cookie = site.cookie if site.cookie else None
             if self._downloader_helper.is_downloader("qbittorrent", service=service):
                 torrent = downloader_instance.add_torrent(content=torrent_url,
-                                                download_dir=save_path,
-                                                is_paused=False,
-                                                cookie=cookie,
-                                                tag=[settings.TORRENT_TAG, site.name])
+                                                          download_dir=save_path,
+                                                          is_paused=False,
+                                                          cookie=cookie,
+                                                          tag=[settings.TORRENT_TAG, site.name])
                 if torrent:
                     download_id = torrent
             elif self._downloader_helper.is_downloader("transmission", service=service):
                 torrent = downloader_instance.add_torrent(content=torrent_url,
-                                                download_dir=save_path,
-                                                is_paused=False,
-                                                cookie=cookie,
-                                                labels=[settings.TORRENT_TAG, site.name])
+                                                          download_dir=save_path,
+                                                          is_paused=False,
+                                                          cookie=cookie,
+                                                          labels=[settings.TORRENT_TAG, site.name])
                 if torrent:
                     download_id = torrent.hashString
 

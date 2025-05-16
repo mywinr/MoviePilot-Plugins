@@ -1,6 +1,6 @@
 
 /* 复制成功通知样式 */
-.copy-notification[data-v-16bc76e6] {
+.copy-notification[data-v-903968ef] {
   position: fixed;
   top: 20px;
   left: 50%;
@@ -12,13 +12,13 @@
   font-size: 14px;
   z-index: 9999;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
-  animation: slide-in-16bc76e6 0.3s ease-out;
+  animation: slide-in-903968ef 0.3s ease-out;
 }
-.fade-out[data-v-16bc76e6] {
+.fade-out[data-v-903968ef] {
   opacity: 0;
   transition: opacity 0.5s ease-out;
 }
-@keyframes slide-in-16bc76e6 {
+@keyframes slide-in-903968ef {
 0% {
     transform: translate(-50%, -20px);
     opacity: 0;
