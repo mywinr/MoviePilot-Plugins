@@ -67,6 +67,9 @@ MCP Server 提供了多种工具，可以通过大语言模型调用：
 
 ![Cherry Studio配置示例](./assets/cherry_studio.png)
 
+其中{host}是Movie Pilot的外网访问域名，{port}是监听端口，可在配置也配置。
+{access_token}是MCP Server的认证令牌，可在配置页面获取。
+
 ## 使用示例
 
 ### 搜索电影资源
