@@ -2,7 +2,7 @@ import contextlib
 import logging
 from collections.abc import AsyncIterator
 import json
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 import click
 import httpx
@@ -22,8 +22,9 @@ from event_store import SQLiteEventStore
 # Configure logging
 logger = logging.getLogger(__name__)
 
-# 导入工具管理器
+# 导入工具管理器和提示管理器
 from tools import ToolManager
+from prompts import PromptManager
 
 # Token管理器
 class TokenManager:
@@ -133,10 +134,14 @@ def main(
     else:
         logger.warning("未设置认证Token，API安全性无法保证！请尽快设置Token")
 
-    app = Server("mcp-streamable-http-demo")
+    # 创建Server实例
+    app = Server("moviepilot-mcp-server")
 
     # 初始化工具管理器
     tool_manager = ToolManager(token_manager)
+
+    # 初始化提示管理器
+    prompt_manager = PromptManager(token_manager)
 
     @app.call_tool()
     async def call_tool(
@@ -146,7 +151,23 @@ def main(
 
     @app.list_tools()
     async def list_tools() -> list[types.Tool]:
-        return tool_manager.list_tools()
+        tools = tool_manager.list_tools()
+        logger.info(f"列出工具列表: {[tool.name for tool in tools]}")
+        return tools
+        
+    # 注册prompts功能
+    @app.list_prompts()
+    async def list_prompts() -> list[types.Prompt]:
+        prompts = prompt_manager.list_prompts()
+        logger.info(f"列出提示列表: {len(prompts)} 个提示")
+        return prompts
+
+    @app.get_prompt()
+    async def get_prompt(
+        name: str, arguments: Optional[Dict[str, Any]] = None
+    ) -> types.GetPromptResult:
+        logger.info(f"获取提示: {name} 参数: {arguments}")
+        return await prompt_manager.get_prompt(name, arguments)
 
     # Create event store for resumability
     logger.info("初始化SQLite事件存储")
