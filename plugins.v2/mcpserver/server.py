@@ -138,6 +138,11 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
     default="",
     help="MoviePilot access token for API requests",
 )
+@click.option(
+    "--log-file",
+    default="",
+    help="Log file path to write logs to",
+)
 def main(
     host: str,
     port: int,
@@ -145,11 +150,39 @@ def main(
     json_response: bool,
     auth_token: str,
     access_token: str,
+    log_file: str,
 ) -> int:
     # Configure logging
+    log_handlers = []
+
+    # 控制台日志处理器
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+    log_handlers.append(console_handler)
+
+    # 如果提供了日志文件路径，添加文件日志处理器
+    if log_file:
+        try:
+            # 确保日志目录存在
+            log_dir = os.path.dirname(log_file)
+            if log_dir and not os.path.exists(log_dir):
+                os.makedirs(log_dir, exist_ok=True)
+
+            # 创建文件处理器
+            file_handler = logging.FileHandler(log_file, encoding='utf-8')
+            file_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+            log_handlers.append(file_handler)
+
+            logger.info(f"日志将同时输出到文件: {log_file}")
+        except Exception as e:
+            print(f"设置日志文件失败: {str(e)}")
+            print(traceback.format_exc())
+
+    # 配置根日志记录器
     logging.basicConfig(
         level=getattr(logging, log_level.upper()),
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=log_handlers
     )
 
     logger.info(f"正在启动MCP服务器于 {host}:{port}")

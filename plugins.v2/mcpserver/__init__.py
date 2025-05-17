@@ -53,8 +53,6 @@ class MCPServer(_PluginBase):
 
     _enable = False
     _server_process = None
-    _log_thread = None
-    _log_stop_event = None
     _monitor_thread = None
     _monitor_stop_event = None
     _config = {
@@ -254,13 +252,18 @@ class MCPServer(_PluginBase):
             # 获取已保存的 access_token
             access_token = self._config.get("access_token", "")
 
+            # 获取日志文件路径
+            log_file_path = str(Path(settings.LOG_PATH) / "plugins" / "mcpserver.log")
+            logger.info(f"设置MCP服务器日志输出到: {log_file_path}")
+
             # 构建启动命令
             cmd = [
                 str(self._python_bin),
                 str(launcher_script),
                 "--host", self._config["host"],
                 "--port", str(self._config["port"]),
-                "--log-level", self._config["log_level"]
+                "--log-level", self._config["log_level"],
+                "--log-file", log_file_path
             ]
 
             # 添加认证参数
@@ -276,20 +279,15 @@ class MCPServer(_PluginBase):
             self._stop_all_threads()
 
             # 创建新的停止事件
-            self._log_stop_event = threading.Event()
             self._monitor_stop_event = threading.Event()
 
             # 启动前确保进程引用为空
             self._server_process = None
 
             try:
-                # 启动进程 - 使用pipe获取输出
+                # 启动进程
                 self._server_process = subprocess.Popen(
                     cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    bufsize=1,  # 行缓冲
                     cwd=str(self._plugin_dir)
                 )
 
@@ -297,9 +295,6 @@ class MCPServer(_PluginBase):
                     raise RuntimeError("进程启动失败，Popen返回None")
 
                 logger.info(f"服务器进程已启动，PID: {self._server_process.pid}")
-
-                # 启动日志读取线程
-                self._start_log_thread()
 
                 # 检查服务器是否成功启动
                 startup_success = False
@@ -347,18 +342,7 @@ class MCPServer(_PluginBase):
 
     def _stop_all_threads(self):
         """停止所有线程"""
-        self._stop_log_thread()
         self._stop_monitor_thread()
-
-    def _start_log_thread(self):
-        """启动日志读取线程"""
-        self._log_thread = threading.Thread(
-            target=self._log_reader_thread,
-            args=(self._server_process, self._log_stop_event),
-            daemon=True
-        )
-        self._log_thread.start()
-        logger.info("日志读取线程已启动")
 
     def _start_monitor_thread(self):
         """启动进程监控线程"""
@@ -615,78 +599,6 @@ class MCPServer(_PluginBase):
 
             self._monitor_thread = None
             self._monitor_stop_event = None
-
-    def _log_reader_thread(self, process, stop_event):
-        """持续读取进程输出的线程函数"""
-        try:
-            logger.info("日志读取线程开始运行")
-
-            # 同时读取stdout和stderr
-            while not stop_event.is_set() and process.poll() is None:
-                # 检查stdout是否有数据
-                stdout_line = process.stdout.readline()
-                if stdout_line:
-                    # 记录标准输出
-                    logger.info(f"MCP服务器: {stdout_line.rstrip()}")
-
-                # 检查stderr是否有数据
-                stderr_line = process.stderr.readline()
-                if stderr_line:
-                    # 记录错误输出
-                    logger.error(f"MCP服务器错误: {stderr_line.rstrip()}")
-
-                # 如果两个流都没有读到数据，短暂休眠避免CPU占用
-                if not stdout_line and not stderr_line:
-                    time.sleep(0.1)
-
-            # 进程已结束，尝试读取剩余输出
-            if process.poll() is not None:
-                self._read_remaining_output(process)
-
-        except Exception as e:
-            logger.error(f"日志读取线程发生异常: {str(e)}")
-            logger.error(traceback.format_exc())
-        finally:
-            logger.info("日志读取线程已结束")
-
-    def _read_remaining_output(self, process):
-        """读取进程的剩余输出"""
-        try:
-            remaining_stdout, remaining_stderr = process.communicate(timeout=2)
-
-            if remaining_stdout:
-                for line in remaining_stdout.splitlines():
-                    if line:
-                        logger.info(f"MCP服务器(结束): {line}")
-
-            if remaining_stderr:
-                for line in remaining_stderr.splitlines():
-                    if line:
-                        logger.error(f"MCP服务器错误(结束): {line}")
-
-            # 记录进程退出状态
-            exitcode = process.poll()
-            logger.info(f"MCP服务器进程已退出，返回码: {exitcode}")
-        except subprocess.TimeoutExpired:
-            logger.warning("读取进程剩余输出超时")
-        except Exception as e:
-            logger.error(f"读取剩余输出时发生错误: {str(e)}")
-
-    def _stop_log_thread(self):
-        """停止日志读取线程"""
-        if self._log_stop_event and self._log_thread:
-            logger.info("正在停止日志读取线程...")
-            self._log_stop_event.set()
-
-            # 等待线程结束，但设置超时以避免阻塞
-            self._log_thread.join(timeout=3)
-            if self._log_thread.is_alive():
-                logger.warning("日志读取线程未能在3秒内正常停止")
-            else:
-                logger.info("日志读取线程已正常停止")
-
-            self._log_thread = None
-            self._log_stop_event = None
 
     def _wait_for_server_startup(self) -> bool:
         """等待服务器启动并进行健康检查"""

@@ -640,14 +640,14 @@ class MovieDownloadTool(BaseTool):
             ),
             types.Tool(
                 name="download-torrent",
-                description="下载指定的种子资源。处理流程：1)识别媒体：调用recognize-media工具；2)搜索资源：使用search-movie工具；3)确认下载：向用户展示资源信息并获取确认(格式:'我找到了[媒体名称][清晰度]资源，确认下载吗？')；4)执行下载：用户确认后调用本工具。重要：下载前必须向用户确认，只有用户明确同意后才执行下载操作。",
+                description="通过资源下载链接下载资源",
                 inputSchema={
                     "type": "object",
                     "required": ["torrent_url", "media_type"],
                     "properties": {
                         "torrent_url": {
                             "type": "string",
-                            "description": "要下载的种子资源链接"
+                            "description": "资源下载链接"
                         },
                         "downloader": {
                             "type": "string",
