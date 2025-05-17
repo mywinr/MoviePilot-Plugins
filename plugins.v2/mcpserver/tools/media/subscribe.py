@@ -528,7 +528,7 @@ class SubscribeTool(BaseTool):
             ),
             types.Tool(
                 name="add-subscribe",
-                description="添加新的影视资源订阅。处理用户模糊的影视资源名称时，建议先调用get-media-prompt工具获取处理指南，再调用recognize-media工具识别媒体信息。",
+                description="添加新的影视资源订阅。处理流程：1)调用recognize-media工具识别媒体；2)构建订阅参数(name,type,year,season等)；3)向用户确认订阅信息(格式:'我已识别到[媒体名称][类型][年份]，确认要订阅吗？')；4)用户确认后，调用本工具。重要：在执行订阅操作前，必须向用户展示识别结果并获取确认，只有用户明确同意后才执行订阅操作。",
                 inputSchema={
                     "type": "object",
                     "properties": {

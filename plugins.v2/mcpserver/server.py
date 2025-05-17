@@ -1,12 +1,13 @@
 import contextlib
 import logging
+import os
+import socket
+import sys
+import traceback
 from collections.abc import AsyncIterator
-import json
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 
 import click
-import httpx
-import anyio
 import mcp.types as types
 from mcp.server.lowlevel import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
@@ -17,7 +18,34 @@ from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
-from event_store import SQLiteEventStore
+# 设置详细的异常处理
+sys.excepthook = lambda exctype, value, tb: print(f"全局异常: {exctype.__name__}: {value}\n{''.join(traceback.format_tb(tb))}")
+
+try:
+    from event_store import SQLiteEventStore
+except Exception as e:
+    print(f"导入SQLiteEventStore失败: {str(e)}\n{traceback.format_exc()}")
+    # 定义一个简单的内存事件存储作为备用
+    from mcp.server.streamable_http import EventCallback, EventId, EventMessage, EventStore, StreamId
+    class SimpleMemoryEventStore(EventStore):
+        """简单的内存事件存储，作为SQLiteEventStore的备用"""
+        def __init__(self):
+            self.events = {}
+            print("使用简单内存事件存储作为备用")
+
+        async def store_event(self, stream_id: StreamId, message: Any) -> EventId:
+            event_id = f"event_{len(self.events) + 1}"
+            self.events[event_id] = (stream_id, message)
+            return event_id
+
+        async def replay_events_after(self, last_event_id: EventId, send_callback: EventCallback) -> StreamId | None:
+            return None
+
+        async def start_cleanup(self):
+            pass
+
+        async def stop_cleanup(self):
+            pass
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -154,7 +182,7 @@ def main(
         tools = tool_manager.list_tools()
         logger.info(f"列出工具列表: {[tool.name for tool in tools]}")
         return tools
-        
+
     # 注册prompts功能
     @app.list_prompts()
     async def list_prompts() -> list[types.Prompt]:
@@ -170,15 +198,35 @@ def main(
         return await prompt_manager.get_prompt(name, arguments)
 
     # Create event store for resumability
-    logger.info("初始化SQLite事件存储")
-    # 创建SQLite事件存储，启用自动清理功能
-    event_store = SQLiteEventStore(
-        db_path="events.db",              # 数据存储在当前目录的events.db文件中
-        max_events_per_stream=100,        # 每个流最多保留100条事件
-        max_event_age_days=30,            # 事件保留30天
-        auto_cleanup_interval_hours=24,   # 每24小时自动清理一次
-        max_db_size_mb=100                # 数据库最大100MB
-    )
+    logger.info("初始化事件存储")
+    try:
+        # 检查当前目录是否可写
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        test_file_path = os.path.join(current_dir, "test_write_permission.tmp")
+        try:
+            with open(test_file_path, 'w') as f:
+                f.write("test")
+            os.remove(test_file_path)
+            logger.info(f"当前目录 {current_dir} 可写")
+        except Exception as e:
+            logger.error(f"当前目录 {current_dir} 不可写: {str(e)}")
+            raise RuntimeError(f"当前目录不可写，无法创建事件存储: {str(e)}")
+
+        # 尝试创建SQLite事件存储
+        logger.info("创建SQLite事件存储")
+        event_store = SQLiteEventStore(
+            db_path=os.path.join(current_dir, "events.db"),  # 使用绝对路径
+            max_events_per_stream=100,        # 每个流最多保留100条事件
+            max_event_age_days=30,            # 事件保留30天
+            auto_cleanup_interval_hours=24,   # 每24小时自动清理一次
+            max_db_size_mb=100                # 数据库最大100MB
+        )
+        logger.info("SQLite事件存储创建成功")
+    except Exception as e:
+        logger.error(f"创建SQLite事件存储失败，使用内存存储作为备用: {str(e)}")
+        logger.error(traceback.format_exc())
+        # 使用内存存储作为备用
+        event_store = SimpleMemoryEventStore()
 
     # Create the session manager with our app and event store
     logger.info("创建会话管理器")
@@ -195,20 +243,39 @@ def main(
         await session_manager.handle_request(scope, receive, send)
 
     @contextlib.asynccontextmanager
-    async def lifespan(app: Starlette) -> AsyncIterator[None]:
+    async def lifespan(_: Starlette) -> AsyncIterator[None]:
         """Context manager for managing session manager lifecycle."""
         logger.info("启动会话管理器")
-        async with session_manager.run():
-            logger.info(f"MCP服务器就绪，监听地址: {host}:{port}")
-            # 启动事件存储的自动清理任务
-            await event_store.start_cleanup()
-            try:
-                yield
-            finally:
-                # 停止清理任务
-                logger.info("正在停止事件存储清理任务")
-                await event_store.stop_cleanup()
-                logger.info("服务器正在关闭...")
+        try:
+            async with session_manager.run():
+                logger.info(f"MCP服务器就绪，监听地址: {host}:{port}")
+                # 启动事件存储的自动清理任务
+                try:
+                    logger.info("启动事件存储自动清理任务")
+                    await event_store.start_cleanup()
+                    logger.info("事件存储自动清理任务启动成功")
+                except Exception as e:
+                    logger.error(f"启动事件存储自动清理任务失败: {str(e)}")
+                    logger.error(traceback.format_exc())
+
+                try:
+                    yield
+                finally:
+                    # 停止清理任务
+                    try:
+                        logger.info("正在停止事件存储清理任务")
+                        await event_store.stop_cleanup()
+                        logger.info("事件存储清理任务已停止")
+                    except Exception as e:
+                        logger.error(f"停止事件存储清理任务失败: {str(e)}")
+                        logger.error(traceback.format_exc())
+
+                    logger.info("服务器正在关闭...")
+        except Exception as e:
+            logger.error(f"会话管理器启动失败: {str(e)}")
+            logger.error(traceback.format_exc())
+            # 重新抛出异常，让服务器知道启动失败
+            raise
 
     # 创建中间件列表
     middleware = [
@@ -233,16 +300,53 @@ def main(
     starlette_app.state.token_manager = token_manager
 
     import uvicorn
+    from uvicorn.config import Config
+    from uvicorn.server import Server as UvicornServer
 
     logger.info(f"启动Uvicorn服务器 - 监听于 {host}:{port}")
-    uvicorn.run(
-        starlette_app,
-        host=host,
-        port=port,
-        log_level=log_level.lower()
-    )
+    try:
+        # 创建自定义配置，以便我们可以设置socket选项
+        config = Config(
+            app=starlette_app,
+            host=host,
+            port=port,
+            log_level=log_level.lower(),
+            timeout_keep_alive=120,  # 增加keep-alive超时时间
+            access_log=True,         # 启用访问日志
+            loop="auto",             # 自动选择事件循环
+            reload=False,            # 禁用热重载
+            workers=1                # 单进程模式
+        )
 
-    logger.info("MCP服务器已关闭")
+        # 创建服务器实例
+        server = UvicornServer(config=config)
+
+        # 添加一个钩子来设置socket选项
+        original_startup = server.startup
+
+        async def custom_startup(**kwargs):
+            # 调用原始的启动方法，传递所有参数
+            await original_startup(**kwargs)
+
+            # 设置SO_REUSEADDR选项，允许重用处于TIME_WAIT状态的端口
+            if hasattr(server, 'servers'):
+                for s in server.servers:
+                    if hasattr(s, 'sockets'):
+                        for sock in s.sockets:
+                            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                            logger.info("已设置SO_REUSEADDR选项，允许重用TIME_WAIT状态的端口")
+
+        # 替换启动方法
+        server.startup = custom_startup
+
+        # 启动服务器
+        server.run()
+        logger.info("MCP服务器已正常关闭")
+    except Exception as e:
+        logger.error(f"Uvicorn服务器启动或运行过程中出错: {str(e)}")
+        logger.error(traceback.format_exc())
+        return 1
+
     return 0
 
 if __name__ == "__main__":

@@ -64,7 +64,7 @@ class MCPServer(_PluginBase):
         "health_check_interval": 3,  # 健康检查间隔(秒)
         "max_startup_time": 60,      # 最大启动等待时间(秒)
         "venv_dir": "venv",          # 虚拟环境目录名
-        "dependencies": ["mcp[cli]", "psutil"],  # 需要安装的依赖
+        "dependencies": ["mcp[cli]"],  # 需要安装的依赖
         "auto_restart": True,        # 是否自动重启意外终止的服务器
         "restart_delay": 5,          # 重启前等待时间(秒)
         "auth_token": "",            # API认证令牌
@@ -98,7 +98,7 @@ class MCPServer(_PluginBase):
 
         # 设置健康检查URL
         port = int(self._config["port"])
-        self._health_check_url = f"http://localhost:{port}/mcp"
+        self._health_check_url = f"http://localhost:{port}/mcp/"
 
         if not self._enable:
             # 如果插件被禁用，停止服务器
@@ -109,7 +109,6 @@ class MCPServer(_PluginBase):
         # 确保虚拟环境存在
         if not self._ensure_venv():
             logger.error("无法创建或验证虚拟环境，插件无法启动")
-            self._enable = False
             return
 
         # 检查用户名和密码是否已配置
@@ -131,6 +130,18 @@ class MCPServer(_PluginBase):
         # 保存 access_token 到配置
         self._config["access_token"] = access_token
         logger.info("已获取 MoviePilot 的 access token，将用于 API 请求")
+
+        # 检查服务器是否已在运行
+        server_status = self._get_server_status()
+        if not server_status["running"] and self._enable:
+            # 如果插件已启用且服务器未运行，则自动启动服务器
+            logger.info("插件已启用，服务器未运行，正在自动启动服务器...")
+            try:
+                self._start_server()
+                logger.info("服务器已自动启动")
+            except Exception as e:
+                logger.error(f"自动启动服务器失败: {str(e)}")
+                logger.error(traceback.format_exc())
 
     def _ensure_venv(self) -> bool:
         """确保虚拟环境存在并安装了所需依赖"""
@@ -268,41 +279,70 @@ class MCPServer(_PluginBase):
             self._log_stop_event = threading.Event()
             self._monitor_stop_event = threading.Event()
 
-            # 启动进程 - 使用pipe获取输出
-            self._server_process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,  # 行缓冲
-                cwd=str(self._plugin_dir)
-            )
+            # 启动前确保进程引用为空
+            self._server_process = None
 
-            logger.info(f"服务器进程已启动，PID: {self._server_process.pid}")
-
-            # 启动日志读取线程
-            self._start_log_thread()
-
-            # 检查服务器是否成功启动
-            if self._wait_for_server_startup():
-                logger.info(
-                    f"MCP服务器已启动 - {self._config['host']}:{self._config['port']}"
+            try:
+                # 启动进程 - 使用pipe获取输出
+                self._server_process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    bufsize=1,  # 行缓冲
+                    cwd=str(self._plugin_dir)
                 )
 
-                # 启动进程监控线程
-                if self._config["auto_restart"]:
-                    self._start_monitor_thread()
-            else:
-                # 终止进程
-                self._stop_server()
-                error_msg = "服务器启动超时或健康检查失败，请检查日志"
-                logger.error(error_msg)
-                raise Exception(error_msg)
+                if self._server_process is None:
+                    raise RuntimeError("进程启动失败，Popen返回None")
+
+                logger.info(f"服务器进程已启动，PID: {self._server_process.pid}")
+
+                # 启动日志读取线程
+                self._start_log_thread()
+
+                # 检查服务器是否成功启动
+                startup_success = False
+                try:
+                    startup_success = self._wait_for_server_startup()
+                except Exception as e:
+                    logger.error(f"等待服务器启动时出错: {str(e)}")
+                    logger.error(traceback.format_exc())
+                    startup_success = False
+
+                if startup_success:
+                    logger.info(
+                        f"MCP服务器已启动 - {self._config['host']}:{self._config['port']}"
+                    )
+
+                    # 启动进程监控线程
+                    if self._config["auto_restart"]:
+                        self._start_monitor_thread()
+                else:
+                    # 终止进程
+                    logger.error("服务器启动失败，尝试停止进程")
+                    self._stop_server()
+                    error_msg = "服务器启动超时或健康检查失败，请检查日志"
+                    logger.error(error_msg)
+                    raise Exception(error_msg)
+            except Exception as e:
+                logger.error(f"启动服务器进程时出错: {str(e)}")
+                logger.error(traceback.format_exc())
+
+                # 确保进程被终止
+                if self._server_process is not None:
+                    try:
+                        self._stop_server()
+                    except Exception as stop_error:
+                        logger.error(f"停止失败的服务器进程时出错: {str(stop_error)}")
+
+                # 清除进程引用
+                self._server_process = None
+                raise
 
         except Exception as e:
             logger.error(f"启动MCP服务器失败: {str(e)}")
             logger.error(traceback.format_exc())
-            self._enable = False
             self._server_process = None
 
     def _stop_all_threads(self):
@@ -347,25 +387,32 @@ class MCPServer(_PluginBase):
         family = addr_info[0][0]  # AF_INET or AF_INET6
         sock_type = addr_info[0][1]
 
+        # 尝试使用 SO_REUSEADDR 选项
         s = socket.socket(family, sock_type)
         try:
+            # 设置 SO_REUSEADDR 选项，允许重用处于 TIME_WAIT 状态的端口
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            logger.info("已设置 SO_REUSEADDR 选项，允许重用 TIME_WAIT 状态的端口")
             s.bind((host, port))
             s.close()
-            logger.info(f"端口 {port}（{host}）未被占用")
+            logger.info(f"端口 {port}（{host}）未被占用或已成功重用")
             return
         except socket.error as e:
-            logger.warning(f"端口 {port}（{host}）已被占用，尝试处理: {e}")
+            logger.warning(f"端口 {port}（{host}）已被占用且无法重用，尝试处理: {e}")
             s.close()
 
-        # 检查端口是否被占用
+        # 如果设置 SO_REUSEADDR 后仍然无法绑定，说明端口被其他进程占用
+        # 尝试再次检查，确认是否真的被占用
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
+            # 再次尝试设置 SO_REUSEADDR
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             s.bind((host, port))
             s.close()
-            logger.info(f"端口 {port} 未被占用")
+            logger.info(f"端口 {port} 未被占用或已成功重用")
             return  # 端口未被占用，直接返回
         except Exception as e:
-            logger.warning(f"端口 {port} 已被占用 {str(e)}，尝试处理")
+            logger.warning(f"端口 {port} 已被占用且无法重用 {str(e)}，尝试处理")
             s.close()
 
         # 端口被占用，尝试终止占用进程
@@ -651,10 +698,16 @@ class MCPServer(_PluginBase):
         logger.info(f"等待服务器启动，最长等待{max_time}秒")
 
         while time.time() - start_time < max_time:
-            # 检查进程是否仍在运行
+            # 检查进程是否存在且仍在运行
+            if self._server_process is None:
+                logger.error("服务器进程引用丢失，可能已意外终止")
+                return False
+
             if self._server_process.poll() is not None:
                 exitcode = self._server_process.poll()
                 logger.error(f"服务器进程已退出，返回码: {exitcode}")
+                # 清除进程引用，防止后续访问出错
+                self._server_process = None
                 return False
 
             # 尝试连接服务器
@@ -695,28 +748,64 @@ class MCPServer(_PluginBase):
             try:
                 logger.info("正在停止MCP服务器进程...")
 
-                # 优雅地终止进程 (Linux)
-                self._server_process.send_signal(signal.SIGTERM)
+                # 检查进程是否已经终止
+                if self._server_process.poll() is not None:
+                    exitcode = self._server_process.poll()
+                    logger.info(f"服务器进程已经终止，返回码: {exitcode}")
+                    self._server_process = None
+                    logger.info("MCP服务器进程已停止")
+                    return
+
+                try:
+                    # 优雅地终止进程 (Linux)
+                    self._server_process.send_signal(signal.SIGTERM)
+                except Exception as e:
+                    logger.error(f"发送SIGTERM信号失败: {str(e)}")
+                    # 如果发送信号失败，尝试直接kill
+                    try:
+                        self._server_process.kill()
+                        logger.info("已直接强制终止进程")
+                    except Exception as kill_error:
+                        logger.error(f"强制终止进程失败: {str(kill_error)}")
+
+                    # 无论如何清除进程引用
+                    self._server_process = None
+                    logger.info("MCP服务器进程引用已清除")
+                    return
 
                 # 给进程一些时间来优雅地关闭
+                process_exited = False
                 for i in range(5):  # 等待最多5秒
-                    if self._server_process.poll() is not None:
-                        exitcode = self._server_process.poll()
-                        logger.info(f"服务器进程已优雅退出，返回码: {exitcode}")
+                    try:
+                        if self._server_process.poll() is not None:
+                            exitcode = self._server_process.poll()
+                            logger.info(f"服务器进程已优雅退出，返回码: {exitcode}")
+                            process_exited = True
+                            break
+                        logger.info(f"等待服务器进程退出... ({i+1}/5)")
+                        time.sleep(1)
+                    except Exception as poll_error:
+                        logger.error(f"检查进程状态失败: {str(poll_error)}")
+                        process_exited = False
                         break
-                    logger.info(f"等待服务器进程退出... ({i+1}/5)")
-                    time.sleep(1)
 
                 # 如果进程仍在运行，强制终止
-                if self._server_process.poll() is None:
-                    logger.info("优雅终止失败，强制终止进程")
-                    self._server_process.kill()
+                if not process_exited:
+                    try:
+                        if self._server_process and self._server_process.poll() is None:
+                            logger.info("优雅终止失败，强制终止进程")
+                            self._server_process.kill()
+                    except Exception as kill_error:
+                        logger.error(f"强制终止进程失败: {str(kill_error)}")
 
+                # 清除进程引用
                 self._server_process = None
                 logger.info("MCP服务器进程已停止")
             except Exception as e:
                 logger.error(f"停止MCP服务器进程失败: {str(e)}")
                 logger.error(traceback.format_exc())
+                # 确保进程引用被清除
+                self._server_process = None
 
     def _get_server_status(self) -> Dict[str, Any]:
         """获取服务器详细状态"""
@@ -1040,14 +1129,61 @@ class MCPServer(_PluginBase):
         """API Endpoint: 重启服务器"""
         try:
             logger.info("正在执行服务器重启...")
+
+            # 先停止服务器
+            logger.info("正在停止服务器进程...")
             self._stop_server()
+            logger.info("服务器进程已停止，等待端口释放...")
             time.sleep(2)  # 增加等待时间，确保端口完全释放
 
-            # 返回服务器已停止的状态，由前端决定是否重新启动
-            return {
-                "message": "服务器已停止，请手动启动",
-                "server_status": self._get_server_status()
-            }
+            # 检查用户名和密码是否已配置
+            username = self._config.get("mp_username", "")
+            password = self._config.get("mp_password", "")
+
+            if not username or not password:
+                logger.error("未配置 MoviePilot 用户名或密码，无法重启服务器")
+                return {
+                    "message": "服务器已停止，但未配置 MoviePilot 用户名或密码，无法重新启动",
+                    "error": True,
+                    "server_status": self._get_server_status()
+                }
+
+            # 尝试获取 access_token
+            access_token = self._get_moviepilot_access_token()
+            if not access_token:
+                logger.error("无法获取 MoviePilot 的 access token，无法重启服务器")
+                return {
+                    "message": "服务器已停止，但无法获取 MoviePilot 的 access token，无法重新启动",
+                    "error": True,
+                    "server_status": self._get_server_status()
+                }
+
+            # 保存 access_token 到配置
+            self._config["access_token"] = access_token
+            logger.info("已获取 MoviePilot 的 access token，将用于 API 请求")
+
+            # 启动服务器
+            logger.info("正在重新启动服务器进程...")
+            self._start_server()
+
+            # 等待服务器启动
+            time.sleep(3)
+
+            # 获取最新状态
+            current_status = self._get_server_status()
+
+            if current_status["running"]:
+                logger.info("服务器已成功重启")
+                return {
+                    "message": "服务器已成功重启",
+                    "server_status": current_status
+                }
+            else:
+                logger.warning("服务器重启后状态检查失败，可能需要手动刷新状态")
+                return {
+                    "message": "服务器重启过程完成，但状态检查未通过，请手动刷新状态",
+                    "server_status": current_status
+                }
         except Exception as e:
             logger.error(f"重启服务器失败: {str(e)}")
             logger.error(traceback.format_exc())
@@ -1247,14 +1383,14 @@ class MCPServer(_PluginBase):
 
             # 记录日志
             logger.info(
-                "获取服务器状态: running=%s, health=%s",
+                "插件启动：%s, 获取服务器状态: running=%s, health=%s", self._enable,
                 status['running'], status['health']
             )
 
             return {
                 "enable": self._enable,
                 "server_status": status,
-                "message": "获取服务器状态成功"
+                "message": "获取服务器状态成功!!!"
             }
         except Exception as e:
             logger.error(f"获取服务器状态失败: {str(e)}")

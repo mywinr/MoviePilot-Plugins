@@ -35,7 +35,7 @@ class MovieDownloadTool(BaseTool):
                 )
             ]
 
-    def _format_search_results(self, torrents: list, keyword: str, year: str = None, detailed: bool = True) -> str:
+    def _format_search_results(self, torrents: list, keyword: str, year: str = None, detailed: bool = True, limit: int = 50) -> str:
         """
         格式化搜索结果
 
@@ -44,6 +44,7 @@ class MovieDownloadTool(BaseTool):
             keyword: 搜索关键词
             year: 年份(可选)
             detailed: 是否显示详细信息(默认为True)
+            limit: 最大返回结果数量(默认为50)
 
         返回:
             格式化后的文本
@@ -51,8 +52,12 @@ class MovieDownloadTool(BaseTool):
         if not torrents:
             return f"未找到符合条件的资源：{keyword} {year or ''}"
 
-        # 格式化搜索结果
-        result_text = f"找到 {len(torrents)} 个资源：\n\n"
+        # 限制结果数量
+        if limit > 0 and len(torrents) > limit:
+            torrents = torrents[:limit]
+            result_text = f"找到 {len(torrents)} 个资源（已限制显示前 {limit} 个）：\n\n"
+        else:
+            result_text = f"找到 {len(torrents)} 个资源：\n\n"
         for i, torrent in enumerate(torrents):
             # 检查torrent是否是字典类型
             if not isinstance(torrent, dict):
@@ -189,6 +194,7 @@ class MovieDownloadTool(BaseTool):
             - resolution: 清晰度(可选)，如 1080p, 2160p, 4K 等
             - media_type: 媒体类型(可选)，默认为 "电影"
             - sites: 站点ID列表(可选)，多个站点ID用逗号分隔
+            - limit: 最大返回结果数量(可选)，默认为50
         """
         keyword = arguments.get("keyword")
         if not keyword:
@@ -203,6 +209,17 @@ class MovieDownloadTool(BaseTool):
         year = arguments.get("year")
         media_type = arguments.get("media_type", "电影")
         sites = arguments.get("sites")
+
+        # 强制要求提供sites参数
+        if not sites:
+            return [
+                types.TextContent(
+                    type="text",
+                    text="错误：请提供sites参数，指定1-3个站点ID进行搜索，避免token超限。可通过get-sites工具获取站点列表。"
+                )
+            ]
+
+        limit = int(arguments.get("limit", 50))  # 默认限制为10个结果
 
         try:
             # 首先识别媒体信息
@@ -271,7 +288,8 @@ class MovieDownloadTool(BaseTool):
             torrents = response.get("data", [])
 
             # 使用公共方法格式化结果
-            result_text = self._format_search_results(torrents, keyword, year, detailed=True)
+            result_text = self._format_search_results(
+                torrents, keyword, year, detailed=True, limit=limit)
 
             return [
                 types.TextContent(
@@ -417,6 +435,7 @@ class MovieDownloadTool(BaseTool):
             - page: 页码(可选)，默认为0
             - sites: 站点ID列表(可选)，多个站点ID用逗号分隔
             - detailed: 是否显示详细信息(可选)，默认为False
+            - limit: 最大返回结果数量(可选)，默认为50
         """
         keyword = arguments.get("keyword")
         if not keyword:
@@ -431,6 +450,17 @@ class MovieDownloadTool(BaseTool):
         page = arguments.get("page", 0)
         sites = arguments.get("sites")
         detailed = arguments.get("detailed", False)
+
+        # 强制要求提供sites参数
+        if not sites:
+            return [
+                types.TextContent(
+                    type="text",
+                    text="错误：请提供sites参数，指定1-3个站点ID进行搜索，避免token超限。可通过get-sites工具获取站点列表。"
+                )
+            ]
+
+        limit = int(arguments.get("limit", 50))  # 默认限制为10个结果
 
         try:
             logger.info(f"开始模糊搜索资源，关键词：{keyword}")
@@ -470,7 +500,8 @@ class MovieDownloadTool(BaseTool):
             torrents = response.get("data", [])
 
             # 使用公共方法格式化结果
-            result_text = self._format_search_results(torrents, keyword, detailed=detailed)
+            result_text = self._format_search_results(
+                torrents, keyword, detailed=detailed, limit=limit)
 
             return [
                 types.TextContent(
@@ -537,10 +568,10 @@ class MovieDownloadTool(BaseTool):
         return [
             types.Tool(
                 name="search-movie",
-                description="搜索电影资源，支持按名称、年份、清晰度等条件搜索。处理用户模糊的搜索请求时，建议先调用get-media-prompt工具获取处理指南，再调用recognize-media工具识别媒体信息。",
+                description="搜索电影资源，支持按名称、年份、清晰度等条件搜索。【重要】必须使用sites参数指定1-3个站点ID进行搜索，避免token超限。可通过get-sites工具获取站点列表",
                 inputSchema={
                     "type": "object",
-                    "required": ["keyword"],
+                    "required": ["keyword", "sites"],
                     "properties": {
                         "keyword": {
                             "type": "string",
@@ -561,16 +592,20 @@ class MovieDownloadTool(BaseTool):
                         "sites": {
                             "type": "string",
                             "description": "站点ID列表，多个站点ID用逗号分隔，是数字ID不是站点名称，若没有站点ID可以通过工具get-sites获取"
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "最大返回结果数量，默认为50，设置为较小的值可以减少返回的资源数量"
                         }
                     },
                 },
             ),
             types.Tool(
                 name="fuzzy-search-movie",
-                description="模糊搜索电影资源，当精确搜索无法识别媒体信息时使用此工具。直接在站点中搜索关键词，不需要精确的媒体名称",
+                description="模糊搜索电影资源，当精确搜索无法识别媒体信息时使用此工具。【重要】必须使用sites参数指定1-3个站点ID进行搜索，避免token超限。可通过get-sites工具获取站点列表",
                 inputSchema={
                     "type": "object",
-                    "required": ["keyword"],
+                    "required": ["keyword", "sites"],
                     "properties": {
                         "keyword": {
                             "type": "string",
@@ -587,6 +622,10 @@ class MovieDownloadTool(BaseTool):
                         "detailed": {
                             "type": "boolean",
                             "description": "是否显示详细信息，默认为false，设置为true会显示更多资源详情"
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "最大返回结果数量，默认为50，设置为较小的值可以减少返回的资源数量"
                         }
                     },
                 },
@@ -601,7 +640,7 @@ class MovieDownloadTool(BaseTool):
             ),
             types.Tool(
                 name="download-torrent",
-                description="下载指定的种子资源。处理用户下载请求时，建议先调用get-media-prompt工具获取处理指南，再调用search-movie工具找到合适的资源。",
+                description="下载指定的种子资源。处理流程：1)识别媒体：调用recognize-media工具；2)搜索资源：使用search-movie工具；3)确认下载：向用户展示资源信息并获取确认(格式:'我找到了[媒体名称][清晰度]资源，确认下载吗？')；4)执行下载：用户确认后调用本工具。重要：下载前必须向用户确认，只有用户明确同意后才执行下载操作。",
                 inputSchema={
                     "type": "object",
                     "required": ["torrent_url", "media_type"],

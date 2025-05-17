@@ -93,14 +93,21 @@ class MediaPromptTool(BaseTool):
 将用户的搜索请求转换为搜索参数：
 
 1. **提取搜索信息**：
-   - 关键词(keyword)：影视作品名称
-   - 年份(year)：发行年份
-   - 清晰度(resolution)：如1080p、4K等
-   - 媒体类型(media_type)：电影或电视剧
+   - 关键词(keyword)：影视作品名称（必需）
+   - sites：站点ID列表（必需），必须指定1-3个站点ID，按照优先级高到低依次选取，可通过get-sites工具获取
+   - 年份(year)：发行年份（可选）
+   - 清晰度(resolution)：如1080p、4K等（可选）
+   - 媒体类型(media_type)：电影或电视剧（可选）
 
 2. **选择搜索工具**：
+   - 【重要】必须使用sites参数指定1-3个站点ID进行搜索，这是强制要求
+   - 如果不知道站点ID，先调用get-sites工具获取站点列表
    - 明确资源：使用search-movie工具
    - 模糊搜索：使用fuzzy-search-movie工具
+
+3. **分批搜索策略**：
+   - 如果第一批站点没有找到满意的资源，可以使用不同的站点ID再次搜索
+   - 例如：先搜索站点1,2,3，如果没有满意结果，再搜索站点4,5,6
 
 ## 示例
 用户输入: "找一下阿凡达高清资源"
@@ -109,7 +116,8 @@ class MediaPromptTool(BaseTool):
 工具: search-movie
 参数: {
   "keyword": "阿凡达",
-  "resolution": "1080p"
+  "resolution": "1080p",
+  "sites": "1,2,3"  // 必须指定1-3个站点ID
 }
 ```
 
@@ -220,7 +228,7 @@ class MediaPromptTool(BaseTool):
         return [
             types.Tool(
                 name="get-media-prompt",
-                description="获取处理媒体资源的提示，帮助将用户模糊的影视资源名称转换为API参数。",
+                description="【重要】获取处理媒体资源的详细指南，包含如何限制搜索结果数量避免token超限。在使用search-movie或fuzzy-search-movie工具前，请先调用此工具获取搜索指南。",
                 inputSchema={
                     "type": "object",
                     "properties": {
