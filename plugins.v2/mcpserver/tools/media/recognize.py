@@ -511,57 +511,106 @@ class MediaRecognizeTool(BaseTool):
                     )
                 ]
 
-        # 构建请求参数
-        params = {"page": page}
-        if year:
-            params["year"] = year
-
         try:
-            logger.info(f"查询人物参演作品: person_id={person_id}, page={page}, year={year or '全部'}")
+            # 如果指定了年份，获取所有页面的结果
+            if year:
+                logger.info(f"查询人物参演作品(所有页): person_id={person_id}, year={year}")
 
-            # 调用API获取人物参演作品
-            response = await self._make_request(
-                method="GET",
-                endpoint=f"/api/v1/tmdb/person/credits/{person_id}",
-                params=params
-            )
+                # 存储所有页面的结果
+                all_results = []
+                current_page = 1
 
-            # 检查响应
-            if not response:
+                # 循环获取所有页面的结果，直到返回空列表
+                while True:
+                    # 构建请求参数
+                    params = {"page": current_page}
+
+                    # 调用API获取人物参演作品
+                    response = await self._make_request(
+                        method="GET",
+                        endpoint=f"/api/v1/tmdb/person/credits/{person_id}",
+                        params=params
+                    )
+
+                    # 检查响应
+                    if not response or not isinstance(response, list) or len(response) == 0:
+                        # 没有更多结果，退出循环
+                        break
+
+                    # 将当前页面的结果添加到总结果中
+                    all_results.extend(response)
+
+                    # 增加页码，继续获取下一页
+                    current_page += 1
+
+                # 如果没有找到任何结果
+                if not all_results:
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"未找到人物(ID: {person_id})的参演作品"
+                        )
+                    ]
+
+                # 格式化结果，传入1作为页码，因为我们已经获取了所有页面
+                result_text = self._format_person_credits(all_results, person_id, 1, year)
+
                 return [
                     types.TextContent(
                         type="text",
-                        text=f"查询人物参演作品失败: person_id={person_id}"
+                        text=result_text
                     )
                 ]
+            else:
+                # 如果没有指定年份，使用常规分页方式
+                logger.info(f"查询人物参演作品: person_id={person_id}, page={page}")
 
-            # 确保响应格式正确
-            if not isinstance(response, list):
-                return [
-                    types.TextContent(
-                        type="text",
-                        text=f"查询人物参演作品返回格式错误: 预期列表，实际为 {type(response).__name__}"
-                    )
-                ]
+                # 构建请求参数
+                params = {"page": page}
 
-            # 如果列表为空，表示没有找到作品
-            if len(response) == 0:
-                return [
-                    types.TextContent(
-                        type="text",
-                        text=f"未找到人物(ID: {person_id})的参演作品"
-                    )
-                ]
-
-            # 格式化结果
-            result_text = self._format_person_credits(response, person_id, page, year)
-
-            return [
-                types.TextContent(
-                    type="text",
-                    text=result_text
+                # 调用API获取人物参演作品
+                response = await self._make_request(
+                    method="GET",
+                    endpoint=f"/api/v1/tmdb/person/credits/{person_id}",
+                    params=params
                 )
-            ]
+
+                # 检查响应
+                if not response:
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"查询人物参演作品失败: person_id={person_id}"
+                        )
+                    ]
+
+                # 确保响应格式正确
+                if not isinstance(response, list):
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"查询人物参演作品返回格式错误: 预期列表，实际为 {type(response).__name__}"
+                        )
+                    ]
+
+                # 如果列表为空，表示没有找到作品
+                if len(response) == 0:
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"未找到人物(ID: {person_id})的参演作品"
+                        )
+                    ]
+
+                # 格式化结果
+                result_text = self._format_person_credits(response, person_id, page, year)
+
+                return [
+                    types.TextContent(
+                        type="text",
+                        text=result_text
+                    )
+                ]
 
         except Exception as e:
             logger.error(f"查询人物参演作品时出错: {str(e)}")
@@ -619,7 +668,8 @@ class MediaRecognizeTool(BaseTool):
 
         # 构建标题，包含年份信息和过滤信息
         if year:
-            result_text = f"人物 {person_name} (ID: {person_id}) 的 {year}年 参演作品 (第{page}页)：\n\n"
+            # 当指定年份时，我们获取了所有页面的结果
+            result_text = f"人物 {person_name} (ID: {person_id}) 的 {year}年 参演作品 (全部)：\n\n"
             if filtered_items > 0:
                 result_text += f"注意：已过滤掉 {filtered_items} 个非 {year}年 的作品\n\n"
         else:
@@ -732,28 +782,31 @@ class MediaRecognizeTool(BaseTool):
 
         # 添加分页导航提示
         if credits_list:  # 如果当前页有结果
-            result_text += f"\n## 分页导航\n\n"
-
             # 构建基本参数
             filter_year = year  # 使用传入的年份参数，而不是被覆盖的变量
-            year_param = f", year={filter_year}" if filter_year else ""
 
-            if page > 1:
-                result_text += f"查看上一页: person-credits工具，参数 person_id={person_id}, page={page-1}{year_param}\n"
-
-            # 如果当前页有结果，可能还有下一页
-            next_page = page + 1
-            result_text += f"查看下一页: person-credits工具，参数 person_id={person_id}, page={next_page}{year_param}\n"
-            result_text += f"(如果下一页没有结果，则表示已经获取全部作品)\n"
-
-            # 如果没有指定年份，提示用户可以按年份筛选
+            # 如果指定了年份，我们已经获取了所有页面，不需要显示分页导航
             if not filter_year:
+                result_text += f"\n## 分页导航\n\n"
+
+                year_param = ""
+
+                if page > 1:
+                    result_text += f"查看上一页: person-credits工具，参数 person_id={person_id}, page={page-1}{year_param}\n"
+
+                # 如果当前页有结果，可能还有下一页
+                next_page = page + 1
+                result_text += f"查看下一页: person-credits工具，参数 person_id={person_id}, page={next_page}{year_param}\n"
+                result_text += f"(如果下一页没有结果，则表示已经获取全部作品)\n"
+
+                # 提示用户可以按年份筛选
                 result_text += f"\n## 年份筛选\n\n"
                 result_text += f"您可以通过添加year参数来筛选特定年份的作品，例如：\n"
                 current_year = datetime.datetime.now().year  # 获取当前年份
                 result_text += f"- 查看{current_year}年作品: person-credits工具，参数 person_id={person_id}, year={current_year}\n"
                 result_text += f"- 查看{current_year-1}年作品: person-credits工具，参数 person_id={person_id}, year={current_year-1}\n"
                 result_text += f"- 查看{current_year-2}年作品: person-credits工具，参数 person_id={person_id}, year={current_year-2}\n"
+                result_text += f"(当指定年份时，将自动获取该年份的所有作品，无需分页)\n"
 
         return result_text
 
@@ -816,7 +869,7 @@ class MediaRecognizeTool(BaseTool):
             ),
             types.Tool(
                 name="person-credits",
-                description="查询演员、导演等人物参演的作品列表。返回按年份排序的电影和电视剧作品，包括标题、原始标题、上映年份、简介、海报等信息。支持分页查询和年份筛选，从page=1开始，如果返回结果为空则表示已获取全部作品",
+                description="查询演员、导演等人物参演的作品列表。返回按年份排序的电影和电视剧作品，包括标题、原始标题、上映年份、简介、海报等信息。支持分页查询和年份筛选，从page=1开始，如果返回结果为空则表示已获取全部作品。当指定year参数时，将自动获取该年份的所有作品，无需分页",
                 inputSchema={
                     "type": "object",
                     "required": ["person_id"],
@@ -827,12 +880,12 @@ class MediaRecognizeTool(BaseTool):
                         },
                         "page": {
                             "type": "integer",
-                            "description": "页码，默认为1。从1开始递增查询，直到返回空结果表示已获取全部作品",
+                            "description": "页码，默认为1。从1开始递增查询，直到返回空结果表示已获取全部作品。当指定year参数时，此参数将被忽略",
                             "default": 1
                         },
                         "year": {
                             "type": "integer",
-                            "description": "筛选特定年份的作品，例如2023只显示2023年的作品。不指定则显示所有年份"
+                            "description": "筛选特定年份的作品，例如2023只显示2023年的作品。不指定则显示所有年份。当指定此参数时，将自动获取该年份的所有作品，无需分页"
                         }
                     },
                 },
