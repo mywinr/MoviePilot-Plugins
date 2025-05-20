@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class MovieDownloadTool(BaseTool):
-    """电影搜索和下载工具"""
+    """媒体搜索和下载工具"""
 
     def __init__(self, token_manager=None):
         super().__init__(token_manager)
@@ -19,10 +19,10 @@ class MovieDownloadTool(BaseTool):
 
     async def execute(self, tool_name: str, arguments: dict) -> list[types.TextContent | types.ImageContent]:
         """执行工具逻辑"""
-        if tool_name == "search-movie":
-            return await self._search_movie(arguments)
-        elif tool_name == "fuzzy-search-movie":
-            return await self._fuzzy_search_movie(arguments)
+        if tool_name == "search-media-resources":
+            return await self._search_media_resources(arguments)
+        elif tool_name == "fuzzy-search-media-resources":
+            return await self._fuzzy_search_media_resources(arguments)
         elif tool_name == "download-torrent":
             return await self._download_torrent(arguments)
         elif tool_name == "get-downloaders":
@@ -185,23 +185,28 @@ class MovieDownloadTool(BaseTool):
 
         return result_text
 
-    async def _search_movie(self, arguments: dict) -> list[types.TextContent]:
+    async def _search_media_resources(self, arguments: dict) -> list[types.TextContent]:
         """
-        搜索电影资源
+        搜索媒体资源
         参数:
-            - keyword: 电影名称关键词
+            - keyword: 媒体名称关键词(可选)
+            - mediaid: 媒体ID(可选)，格式为"tmdb:123"或"douban:456"，如果提供则优先使用
             - year: 年份(可选)
             - resolution: 清晰度(可选)，如 1080p, 2160p, 4K 等
             - media_type: 媒体类型(可选)，默认为 "电影"
             - sites: 站点ID列表(可选)，多个站点ID用逗号分隔
             - limit: 最大返回结果数量(可选)，默认为50
         """
+        # 检查是否直接提供了媒体ID
+        mediaid = arguments.get("mediaid")
         keyword = arguments.get("keyword")
-        if not keyword:
+
+        # 如果既没有提供mediaid也没有提供keyword，则返回错误
+        if not mediaid and not keyword:
             return [
                 types.TextContent(
                     type="text",
-                    text="错误：请提供电影名称关键词"
+                    text="错误：请提供媒体名称关键词或媒体ID"
                 )
             ]
 
@@ -222,30 +227,40 @@ class MovieDownloadTool(BaseTool):
         limit = int(arguments.get("limit", 50))  # 默认限制为10个结果
 
         try:
-            # 首先识别媒体信息
-            media_info = await self._recognize_tool.recognize_media(keyword, year, media_type)
-            if not media_info:
-                return [
-                    types.TextContent(
-                        type="text",
-                        text=f"无法识别媒体信息：{keyword} {year or ''}"
-                    )
-                ]
+            # 如果直接提供了媒体ID，则直接使用
+            media_id = mediaid
 
-            # 获取媒体ID
-            media_id = None
-            if "tmdb_id" in media_info and media_info["tmdb_id"]:
-                media_id = f"tmdb:{media_info['tmdb_id']}"
-            elif "douban_id" in media_info and media_info["douban_id"]:
-                media_id = f"douban:{media_info['douban_id']}"
-
+            # 如果没有提供媒体ID，则尝试识别媒体信息
             if not media_id:
-                return [
-                    types.TextContent(
-                        type="text",
-                        text=f"无法获取媒体ID：{keyword} {year or ''}"
+                # 首先识别媒体信息
+                media_info = await self._recognize_tool.recognize_media(keyword, year, media_type)
+                if not media_info:
+                    # 媒体识别失败，建议用户使用search-media工具
+                    suggestion_text = (
+                        f"无法识别媒体信息：{keyword} {year or ''}\n\n"
+                        f"建议使用search-media工具进行模糊搜索，找到正确的媒体信息后再使用search-movie工具。\n"
+                        f"例如：search-media工具，参数 keyword=\"{keyword}\"\n"
                     )
-                ]
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=suggestion_text
+                        )
+                    ]
+
+                # 获取媒体ID
+                if "tmdb_id" in media_info and media_info["tmdb_id"]:
+                    media_id = f"tmdb:{media_info['tmdb_id']}"
+                elif "douban_id" in media_info and media_info["douban_id"]:
+                    media_id = f"douban:{media_info['douban_id']}"
+
+                if not media_id:
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"无法获取媒体ID：{keyword} {year or ''}"
+                        )
+                    ]
 
             # 搜索资源
             params = {
@@ -299,11 +314,11 @@ class MovieDownloadTool(BaseTool):
             ]
 
         except Exception as e:
-            logger.error(f"搜索电影资源时出错: {str(e)}")
+            logger.error(f"搜索媒体资源时出错: {str(e)}")
             return [
                 types.TextContent(
                     type="text",
-                    text=f"搜索电影资源时出错: {str(e)}"
+                    text=f"搜索媒体资源时出错: {str(e)}"
                 )
             ]
 
@@ -427,9 +442,9 @@ class MovieDownloadTool(BaseTool):
             logger.warning(f"获取站点信息失败: {str(e)}")
             return []
 
-    async def _fuzzy_search_movie(self, arguments: dict) -> list[types.TextContent]:
+    async def _fuzzy_search_media_resources(self, arguments: dict) -> list[types.TextContent]:
         """
-        模糊搜索电影资源，不需要精确的媒体名称
+        模糊搜索媒体资源，不需要精确的媒体名称
         参数:
             - keyword: 电影名称关键词
             - page: 页码(可选)，默认为0
@@ -567,19 +582,23 @@ class MovieDownloadTool(BaseTool):
         """返回工具的描述信息"""
         return [
             types.Tool(
-                name="search-movie",
-                description="搜索电影资源，支持按名称、年份、清晰度等条件搜索。【重要】必须使用sites参数指定1-3个站点ID进行搜索，避免token超限。可通过get-sites工具获取站点列表",
+                name="search-media-resources",
+                description="搜索媒体资源，支持按名称、年份、清晰度等条件搜索，返回站点可下载的资源链接。可以通过keyword参数或mediaid参数指定要搜索的媒体，推荐先使用search-media工具获取准确的mediaid。",
                 inputSchema={
                     "type": "object",
-                    "required": ["keyword", "sites"],
+                    "required": ["sites"],
                     "properties": {
                         "keyword": {
                             "type": "string",
-                            "description": "电影名称关键词"
+                            "description": "媒体名称关键词，与mediaid二选一"
+                        },
+                        "mediaid": {
+                            "type": "string",
+                            "description": "媒体ID，格式为'tmdb:123'或'douban:456'，与keyword二选一，优先使用mediaid"
                         },
                         "year": {
                             "type": "string",
-                            "description": "电影年份，如 2023"
+                            "description": "媒体年份，如 2023"
                         },
                         "resolution": {
                             "type": "string",
@@ -601,8 +620,8 @@ class MovieDownloadTool(BaseTool):
                 },
             ),
             types.Tool(
-                name="fuzzy-search-movie",
-                description="模糊搜索电影资源，当精确搜索无法识别媒体信息时使用此工具。【重要】必须使用sites参数指定1-3个站点ID进行搜索，避免token超限。可通过get-sites工具获取站点列表",
+                name="fuzzy-search-media-resources",
+                description="模糊搜索媒体资源，当精确搜索无法识别媒体信息时使用此工具，返回站点可下载的资源链接",
                 inputSchema={
                     "type": "object",
                     "required": ["keyword", "sites"],

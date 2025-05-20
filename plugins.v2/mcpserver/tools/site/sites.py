@@ -37,7 +37,7 @@ class GetSitesTool(BaseTool):
         # 获取站点数据
         response = await self._make_request(
             method="GET",
-            endpoint=f"/api/v1/site/{site_id}"
+            endpoint=f"/api/v1/site/userdata/{site_id}"
         )
         # 检查是否有错误
         if "error" in response:
@@ -56,7 +56,7 @@ class GetSitesTool(BaseTool):
         return [
             types.TextContent(
                 type="text",
-                text="站点数据:\n" + "\n".join(site_data)
+                text="用户站点数据:\n" + "\n".join(site_data)
             )
         ]
 
@@ -114,14 +114,14 @@ class GetSitesTool(BaseTool):
             ),
             types.Tool(
                 name="get-site-data",
-                description="根据site_id获取站点数据",
+                description="根据site_id获取用户在该站点的数据",
                 inputSchema={
                     "type": "object",
                     "required": ["site_id"],
                     "properties": {
                         "site_id": {
                             "type": "string",
-                            "description": "站点ID"
+                            "description": "站点ID，可通过get-sites获取"
                         }
                     },
                 },
