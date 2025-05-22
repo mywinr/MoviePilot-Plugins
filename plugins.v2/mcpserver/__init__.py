@@ -39,7 +39,7 @@ class MCPServer(_PluginBase):
         "MoviePilot-Plugins/main/icons/mcp.png"
     )
     # 插件版本
-    plugin_version = "1.1"
+    plugin_version = "1.2"
     # 插件作者
     plugin_author = "DzAvril"
     # 作者主页
@@ -736,7 +736,7 @@ class MCPServer(_PluginBase):
         # 设置服务URL
         port = int(self._config["port"])
         host = self._config["host"]
-        status["url"] = f"http://{host}:{port}/mcp"
+        status["url"] = f"http://{host}:{port}/mcp/"
 
         # 检查内部进程引用
         process_running = False

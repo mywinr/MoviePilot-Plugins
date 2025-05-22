@@ -86,57 +86,106 @@
       <v-divider></v-divider>
 
       <!-- 操作按钮区域 -->
-      <v-card-actions class="px-2 py-1">
-        <v-btn color="primary" @click="notifySwitch" prepend-icon="mdi-cog" variant="text" size="small">配置</v-btn>
-        <v-spacer></v-spacer>
-        <v-btn
-          color="info"
-          @click="fetchServerStatus"
-          :loading="loading"
-          prepend-icon="mdi-refresh"
-          variant="text"
-          size="small"
-        >
-          刷新状态
-        </v-btn>
-        <v-btn
-          v-if="!serverStatus.running"
-          color="success"
-          @click="startServer"
-          :loading="starting"
-          prepend-icon="mdi-play"
-          variant="text"
-          size="small"
-          :disabled="!pluginEnabled"
-        >
-          启动服务器
-        </v-btn>
-        <v-btn
-          v-if="serverStatus.running"
-          color="warning"
-          @click="stopServer"
-          :loading="stopping"
-          prepend-icon="mdi-stop"
-          variant="text"
-          size="small"
-          :disabled="!pluginEnabled"
-        >
-          停止服务器
-        </v-btn>
-        <v-btn
-          v-if="serverStatus.running"
-          color="success"
-          @click="restartServer"
-          :loading="restarting"
-          prepend-icon="mdi-restart"
-          variant="text"
-          size="small"
-          :disabled="!pluginEnabled"
-        >
-          重启服务器
-        </v-btn>
-        <v-btn color="grey" @click="notifyClose" prepend-icon="mdi-close" variant="text" size="small">关闭</v-btn>
-      </v-card-actions>
+      <v-card-text class="px-3 py-3">
+        <!-- 快捷操作区域 -->
+        <div class="action-section mb-3">
+          <div class="section-title mb-2">
+            <v-icon icon="mdi-lightning-bolt" size="small" color="primary" class="mr-1" />
+            <span class="text-caption font-weight-medium">快捷操作</span>
+          </div>
+          <div class="d-flex justify-space-between ga-2">
+            <v-btn
+              color="primary"
+              @click="notifySwitch"
+              prepend-icon="mdi-cog"
+              variant="elevated"
+              size="small"
+              class="flex-1 action-btn"
+              elevation="2"
+            >
+              配置
+            </v-btn>
+            <v-btn
+              color="info"
+              @click="fetchServerStatus"
+              :loading="loading"
+              prepend-icon="mdi-refresh"
+              variant="elevated"
+              size="small"
+              class="flex-1 action-btn"
+              elevation="2"
+            >
+              刷新状态
+            </v-btn>
+            <v-btn
+              color="grey-darken-1"
+              @click="notifyClose"
+              prepend-icon="mdi-close"
+              variant="elevated"
+              size="small"
+              class="flex-1 action-btn"
+              elevation="2"
+            >
+              关闭
+            </v-btn>
+          </div>
+        </div>
+
+        <!-- 服务器控制区域 -->
+        <div class="action-section">
+          <div class="section-title mb-2">
+            <v-icon icon="mdi-server" size="small" color="primary" class="mr-1" />
+            <span class="text-caption font-weight-medium">服务器控制</span>
+          </div>
+          <div class="server-controls">
+            <v-btn
+              v-if="!serverStatus.running"
+              color="success"
+              @click="startServer"
+              :loading="starting"
+              prepend-icon="mdi-play"
+              variant="elevated"
+              size="small"
+              :disabled="!pluginEnabled"
+              class="server-btn start-btn"
+              elevation="3"
+              block
+            >
+              <v-icon icon="mdi-play" class="mr-2" />
+              启动服务器
+            </v-btn>
+
+            <div v-if="serverStatus.running" class="d-flex ga-2">
+              <v-btn
+                color="warning"
+                @click="stopServer"
+                :loading="stopping"
+                prepend-icon="mdi-stop"
+                variant="elevated"
+                size="small"
+                :disabled="!pluginEnabled"
+                class="flex-1 server-btn stop-btn"
+                elevation="3"
+              >
+                停止服务器
+              </v-btn>
+              <v-btn
+                color="success"
+                @click="restartServer"
+                :loading="restarting"
+                prepend-icon="mdi-restart"
+                variant="elevated"
+                size="small"
+                :disabled="!pluginEnabled"
+                class="flex-1 server-btn restart-btn"
+                elevation="3"
+              >
+                重启服务器
+              </v-btn>
+            </div>
+          </div>
+        </div>
+      </v-card-text>
     </v-card>
   </div>
 </template>
@@ -445,6 +494,138 @@ onMounted(() => {
 
 .config-card:hover {
   box-shadow: 0 3px 6px rgba(var(--v-border-color), 0.1) !important;
+}
+
+/* 操作区域样式 */
+.action-section {
+  background: rgba(var(--v-theme-surface), 0.6);
+  border-radius: 12px;
+  padding: 12px;
+  border: 1px solid rgba(var(--v-border-color), 0.12);
+  backdrop-filter: blur(10px);
+  transition: all 0.3s ease;
+}
+
+.action-section:hover {
+  background: rgba(var(--v-theme-surface), 0.8);
+  border-color: rgba(var(--v-theme-primary), 0.2);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(var(--v-border-color), 0.15);
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  color: rgba(var(--v-theme-on-surface), 0.8);
+  font-weight: 500;
+}
+
+/* 按钮样式优化 */
+.action-btn {
+  border-radius: 8px !important;
+  font-weight: 500 !important;
+  text-transform: none !important;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.action-btn:hover {
+  transform: translateY(-2px) !important;
+  box-shadow: 0 6px 16px rgba(var(--v-border-color), 0.2) !important;
+}
+
+.server-btn {
+  border-radius: 10px !important;
+  font-weight: 600 !important;
+  text-transform: none !important;
+  min-height: 40px !important;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.server-btn:hover {
+  transform: translateY(-2px) !important;
+}
+
+.start-btn {
+  background: linear-gradient(135deg, rgb(var(--v-theme-success)) 0%, rgba(var(--v-theme-success), 0.8) 100%) !important;
+  box-shadow: 0 4px 12px rgba(var(--v-theme-success), 0.3) !important;
+}
+
+.start-btn:hover {
+  box-shadow: 0 8px 20px rgba(var(--v-theme-success), 0.4) !important;
+}
+
+.stop-btn {
+  background: linear-gradient(135deg, rgb(var(--v-theme-warning)) 0%, rgba(var(--v-theme-warning), 0.8) 100%) !important;
+  box-shadow: 0 4px 12px rgba(var(--v-theme-warning), 0.3) !important;
+}
+
+.stop-btn:hover {
+  box-shadow: 0 8px 20px rgba(var(--v-theme-warning), 0.4) !important;
+}
+
+.restart-btn {
+  background: linear-gradient(135deg, rgb(var(--v-theme-success)) 0%, rgba(var(--v-theme-success), 0.8) 100%) !important;
+  box-shadow: 0 4px 12px rgba(var(--v-theme-success), 0.3) !important;
+}
+
+.restart-btn:hover {
+  box-shadow: 0 8px 20px rgba(var(--v-theme-success), 0.4) !important;
+}
+
+/* 手机端适配样式 */
+@media (max-width: 600px) {
+  .plugin-page {
+    padding: 0.25rem;
+  }
+
+  .action-section {
+    padding: 10px;
+    border-radius: 10px;
+  }
+
+  .action-btn {
+    font-size: 0.75rem !important;
+    min-height: 32px !important;
+  }
+
+  .server-btn {
+    font-size: 0.8rem !important;
+    min-height: 36px !important;
+  }
+
+  .section-title {
+    font-size: 0.75rem;
+  }
+}
+
+/* 超小屏幕适配 */
+@media (max-width: 480px) {
+  .action-section {
+    padding: 8px;
+    margin-bottom: 8px !important;
+  }
+
+  .action-btn {
+    font-size: 0.7rem !important;
+    min-height: 30px !important;
+    padding: 0 8px !important;
+  }
+
+  .server-btn {
+    font-size: 0.75rem !important;
+    min-height: 34px !important;
+  }
+
+  /* 在超小屏幕上，快捷操作按钮可以换行 */
+  .action-section:first-child .d-flex {
+    flex-wrap: wrap;
+    gap: 6px !important;
+  }
+
+  .action-section:first-child .action-btn {
+    flex: 1 1 calc(50% - 3px);
+    min-width: 0;
+  }
 }
 
 

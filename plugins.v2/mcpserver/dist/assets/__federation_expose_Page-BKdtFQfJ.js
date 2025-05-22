@@ -11,6 +11,16 @@ const _hoisted_2 = {
 };
 const _hoisted_3 = { class: "text-caption" };
 const _hoisted_4 = { class: "text-caption" };
+const _hoisted_5 = { class: "action-section mb-3" };
+const _hoisted_6 = { class: "section-title mb-2" };
+const _hoisted_7 = { class: "d-flex justify-space-between ga-2" };
+const _hoisted_8 = { class: "action-section" };
+const _hoisted_9 = { class: "section-title mb-2" };
+const _hoisted_10 = { class: "server-controls" };
+const _hoisted_11 = {
+  key: 1,
+  class: "d-flex ga-2"
+};
 
 const {ref,reactive,onMounted} = await importShared('vue');
 
@@ -285,8 +295,6 @@ return (_ctx, _cache) => {
   const _component_v_card_text = _resolveComponent("v-card-text");
   const _component_v_card = _resolveComponent("v-card");
   const _component_v_btn = _resolveComponent("v-btn");
-  const _component_v_spacer = _resolveComponent("v-spacer");
-  const _component_v_card_actions = _resolveComponent("v-card-actions");
 
   return (_openBlock(), _createElementBlock("div", _hoisted_1, [
     _createVNode(_component_v_card, {
@@ -501,97 +509,137 @@ return (_ctx, _cache) => {
           _: 1
         }),
         _createVNode(_component_v_divider),
-        _createVNode(_component_v_card_actions, { class: "px-2 py-1" }, {
+        _createVNode(_component_v_card_text, { class: "px-3 py-3" }, {
           default: _withCtx(() => [
-            _createVNode(_component_v_btn, {
-              color: "primary",
-              onClick: notifySwitch,
-              "prepend-icon": "mdi-cog",
-              variant: "text",
-              size: "small"
-            }, {
-              default: _withCtx(() => _cache[7] || (_cache[7] = [
-                _createTextVNode("配置")
-              ])),
-              _: 1
-            }),
-            _createVNode(_component_v_spacer),
-            _createVNode(_component_v_btn, {
-              color: "info",
-              onClick: fetchServerStatus,
-              loading: loading.value,
-              "prepend-icon": "mdi-refresh",
-              variant: "text",
-              size: "small"
-            }, {
-              default: _withCtx(() => _cache[8] || (_cache[8] = [
-                _createTextVNode(" 刷新状态 ")
-              ])),
-              _: 1
-            }, 8, ["loading"]),
-            (!serverStatus.running)
-              ? (_openBlock(), _createBlock(_component_v_btn, {
-                  key: 0,
-                  color: "success",
-                  onClick: startServer,
-                  loading: starting.value,
-                  "prepend-icon": "mdi-play",
-                  variant: "text",
+            _createElementVNode("div", _hoisted_5, [
+              _createElementVNode("div", _hoisted_6, [
+                _createVNode(_component_v_icon, {
+                  icon: "mdi-lightning-bolt",
                   size: "small",
-                  disabled: !pluginEnabled.value
+                  color: "primary",
+                  class: "mr-1"
+                }),
+                _cache[7] || (_cache[7] = _createElementVNode("span", { class: "text-caption font-weight-medium" }, "快捷操作", -1))
+              ]),
+              _createElementVNode("div", _hoisted_7, [
+                _createVNode(_component_v_btn, {
+                  color: "primary",
+                  onClick: notifySwitch,
+                  "prepend-icon": "mdi-cog",
+                  variant: "elevated",
+                  size: "small",
+                  class: "flex-1 action-btn",
+                  elevation: "2"
+                }, {
+                  default: _withCtx(() => _cache[8] || (_cache[8] = [
+                    _createTextVNode(" 配置 ")
+                  ])),
+                  _: 1
+                }),
+                _createVNode(_component_v_btn, {
+                  color: "info",
+                  onClick: fetchServerStatus,
+                  loading: loading.value,
+                  "prepend-icon": "mdi-refresh",
+                  variant: "elevated",
+                  size: "small",
+                  class: "flex-1 action-btn",
+                  elevation: "2"
                 }, {
                   default: _withCtx(() => _cache[9] || (_cache[9] = [
-                    _createTextVNode(" 启动服务器 ")
+                    _createTextVNode(" 刷新状态 ")
                   ])),
                   _: 1
-                }, 8, ["loading", "disabled"]))
-              : _createCommentVNode("", true),
-            (serverStatus.running)
-              ? (_openBlock(), _createBlock(_component_v_btn, {
-                  key: 1,
-                  color: "warning",
-                  onClick: stopServer,
-                  loading: stopping.value,
-                  "prepend-icon": "mdi-stop",
-                  variant: "text",
+                }, 8, ["loading"]),
+                _createVNode(_component_v_btn, {
+                  color: "grey-darken-1",
+                  onClick: notifyClose,
+                  "prepend-icon": "mdi-close",
+                  variant: "elevated",
                   size: "small",
-                  disabled: !pluginEnabled.value
+                  class: "flex-1 action-btn",
+                  elevation: "2"
                 }, {
                   default: _withCtx(() => _cache[10] || (_cache[10] = [
-                    _createTextVNode(" 停止服务器 ")
+                    _createTextVNode(" 关闭 ")
                   ])),
                   _: 1
-                }, 8, ["loading", "disabled"]))
-              : _createCommentVNode("", true),
-            (serverStatus.running)
-              ? (_openBlock(), _createBlock(_component_v_btn, {
-                  key: 2,
-                  color: "success",
-                  onClick: restartServer,
-                  loading: restarting.value,
-                  "prepend-icon": "mdi-restart",
-                  variant: "text",
+                })
+              ])
+            ]),
+            _createElementVNode("div", _hoisted_8, [
+              _createElementVNode("div", _hoisted_9, [
+                _createVNode(_component_v_icon, {
+                  icon: "mdi-server",
                   size: "small",
-                  disabled: !pluginEnabled.value
-                }, {
-                  default: _withCtx(() => _cache[11] || (_cache[11] = [
-                    _createTextVNode(" 重启服务器 ")
-                  ])),
-                  _: 1
-                }, 8, ["loading", "disabled"]))
-              : _createCommentVNode("", true),
-            _createVNode(_component_v_btn, {
-              color: "grey",
-              onClick: notifyClose,
-              "prepend-icon": "mdi-close",
-              variant: "text",
-              size: "small"
-            }, {
-              default: _withCtx(() => _cache[12] || (_cache[12] = [
-                _createTextVNode("关闭")
-              ])),
-              _: 1
-            })
+                  color: "primary",
+                  class: "mr-1"
+                }),
+                _cache[11] || (_cache[11] = _createElementVNode("span", { class: "text-caption font-weight-medium" }, "服务器控制", -1))
+              ]),
+              _createElementVNode("div", _hoisted_10, [
+                (!serverStatus.running)
+                  ? (_openBlock(), _createBlock(_component_v_btn, {
+                      key: 0,
+                      color: "success",
+                      onClick: startServer,
+                      loading: starting.value,
+                      "prepend-icon": "mdi-play",
+                      variant: "elevated",
+                      size: "small",
+                      disabled: !pluginEnabled.value,
+                      class: "server-btn start-btn",
+                      elevation: "3",
+                      block: ""
+                    }, {
+                      default: _withCtx(() => [
+                        _createVNode(_component_v_icon, {
+                          icon: "mdi-play",
+                          class: "mr-2"
+                        }),
+                        _cache[12] || (_cache[12] = _createTextVNode(" 启动服务器 "))
+                      ]),
+                      _: 1
+                    }, 8, ["loading", "disabled"]))
+                  : _createCommentVNode("", true),
+                (serverStatus.running)
+                  ? (_openBlock(), _createElementBlock("div", _hoisted_11, [
+                      _createVNode(_component_v_btn, {
+                        color: "warning",
+                        onClick: stopServer,
+                        loading: stopping.value,
+                        "prepend-icon": "mdi-stop",
+                        variant: "elevated",
+                        size: "small",
+                        disabled: !pluginEnabled.value,
+                        class: "flex-1 server-btn stop-btn",
+                        elevation: "3"
+                      }, {
+                        default: _withCtx(() => _cache[13] || (_cache[13] = [
+                          _createTextVNode(" 停止服务器 ")
+                        ])),
+                        _: 1
+                      }, 8, ["loading", "disabled"]),
+                      _createVNode(_component_v_btn, {
+                        color: "success",
+                        onClick: restartServer,
+                        loading: restarting.value,
+                        "prepend-icon": "mdi-restart",
+                        variant: "elevated",
+                        size: "small",
+                        disabled: !pluginEnabled.value,
+                        class: "flex-1 server-btn restart-btn",
+                        elevation: "3"
+                      }, {
+                        default: _withCtx(() => _cache[14] || (_cache[14] = [
+                          _createTextVNode(" 重启服务器 ")
+                        ])),
+                        _: 1
+                      }, 8, ["loading", "disabled"])
+                    ]))
+                  : _createCommentVNode("", true)
+              ])
+            ])
           ]),
           _: 1
         })
@@ -603,6 +651,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const PageComponent = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-780b3fba"]]);
+const PageComponent = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-7922d057"]]);
 
 export { PageComponent as default };
