@@ -143,6 +143,11 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
     default="",
     help="Log file path to write logs to",
 )
+@click.option(
+    "--moviepilot-port",
+    default=3001,
+    help="MoviePilot main program port number",
+)
 def main(
     host: str,
     port: int,
@@ -151,6 +156,7 @@ def main(
     auth_token: str,
     access_token: str,
     log_file: str,
+    moviepilot_port: int,
 ) -> int:
     # Configure logging
     log_handlers = []
@@ -186,6 +192,10 @@ def main(
     )
 
     logger.info(f"正在启动MCP服务器于 {host}:{port}")
+
+    # 设置MoviePilot端口号
+    from utils import set_moviepilot_port
+    set_moviepilot_port(moviepilot_port)
 
     # 创建Token管理器
     token_manager = TokenManager(auth_token, access_token)

@@ -38,7 +38,7 @@ class MCPServer(_PluginBase):
         "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/mcp.png"
     )
     # 插件版本
-    plugin_version = "1.4"
+    plugin_version = "1.5"
     # 插件作者
     plugin_author = "DzAvril"
     # 作者主页
@@ -262,7 +262,8 @@ class MCPServer(_PluginBase):
                 "--host", self._config["host"],
                 "--port", str(self._config["port"]),
                 "--log-level", self._config["log_level"],
-                "--log-file", log_file_path
+                "--log-file", log_file_path,
+                "--moviepilot-port", str(settings.PORT)
             ]
 
             # 添加认证参数

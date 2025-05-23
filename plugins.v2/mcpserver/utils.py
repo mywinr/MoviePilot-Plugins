@@ -19,8 +19,18 @@ class Config:
     RETRY_DELAY = 1  # 基础重试延迟（秒）
     REQUEST_TIMEOUT = 600  # 请求超时时间（秒）
 
+    def set_moviepilot_port(self, port: int):
+        """设置MoviePilot端口号"""
+        self.BASE_URL = f"http://localhost:{port}"
+        logger.info(f"MoviePilot端口号已设置为: {port}, BASE_URL: {self.BASE_URL}")
+
 
 config = Config()
+
+
+def set_moviepilot_port(port: int):
+    """设置MoviePilot端口号的全局函数"""
+    config.set_moviepilot_port(port)
 
 
 async def get_http_client() -> httpx.AsyncClient:
