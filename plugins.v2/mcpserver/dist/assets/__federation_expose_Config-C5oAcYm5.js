@@ -7,7 +7,7 @@ const {createTextVNode:_createTextVNode,resolveComponent:_resolveComponent,withC
 const _hoisted_1 = { class: "plugin-config" };
 const _hoisted_2 = { class: "d-flex" };
 
-const {ref,reactive,onMounted,watch} = await importShared('vue');
+const {ref,reactive,onMounted} = await importShared('vue');
 
 
 // 接收初始配置
@@ -47,6 +47,18 @@ const portRules = [
   v => (parseInt(v) >= 1 && parseInt(v) <= 65535) || '端口号必须在1-65535之间'
 ];
 
+// 刷新间隔选项
+const refreshIntervalOptions = [
+  { label: '5秒', value: 5 },
+  { label: '10秒', value: 10 },
+  { label: '15秒', value: 15 },
+  { label: '30秒', value: 30 },
+  { label: '1分钟', value: 60 },
+  { label: '2分钟', value: 120 },
+  { label: '5分钟', value: 300 },
+  { label: '10分钟', value: 600 },
+];
+
 // 配置数据，使用默认值和初始配置合并
 const defaultConfig = {
   enable: true,
@@ -54,6 +66,8 @@ const defaultConfig = {
   auth_token: '',
   mp_username: 'admin',
   mp_password: '',
+  dashboard_refresh_interval: 30, // 默认30秒
+  dashboard_auto_refresh: true,   // 默认启用自动刷新
 };
 
 // 记录原始启用状态
@@ -95,17 +109,19 @@ onMounted(() => {
       if ('mp_password' in props.initialConfig.config) {
         config.mp_password = props.initialConfig.config.mp_password;
       }
+
+      // 处理 Dashboard 刷新间隔
+      if ('dashboard_refresh_interval' in props.initialConfig.config) {
+        config.dashboard_refresh_interval = props.initialConfig.config.dashboard_refresh_interval;
+      }
+
+      // 处理 Dashboard 自动刷新开关
+      if ('dashboard_auto_refresh' in props.initialConfig.config) {
+        config.dashboard_auto_refresh = props.initialConfig.config.dashboard_auto_refresh;
+      }
     }
 
     console.log('处理后的配置:', config);
-  }
-});
-
-// 监听启用状态变化，自动保存配置
-watch(() => config.enable, (newValue, oldValue) => {
-  if (newValue !== oldValue && oldValue !== undefined) {
-    console.log(`启用状态从 ${oldValue} 变为 ${newValue}，自动保存配置`);
-    saveConfig();
   }
 });
 
@@ -133,7 +149,9 @@ async function saveConfig() {
         port: config.port,
         auth_token: config.auth_token,
         mp_username: config.mp_username,
-        mp_password: config.mp_password
+        mp_password: config.mp_password,
+        dashboard_refresh_interval: config.dashboard_refresh_interval,
+        dashboard_auto_refresh: config.dashboard_auto_refresh
       }
     };
     console.log('保存配置:', configToSave);
@@ -315,6 +333,7 @@ return (_ctx, _cache) => {
   const _component_v_row = _resolveComponent("v-row");
   const _component_v_text_field = _resolveComponent("v-text-field");
   const _component_v_tooltip = _resolveComponent("v-tooltip");
+  const _component_v_select = _resolveComponent("v-select");
   const _component_v_form = _resolveComponent("v-form");
   const _component_v_card_text = _resolveComponent("v-card-text");
   const _component_v_spacer = _resolveComponent("v-spacer");
@@ -334,7 +353,7 @@ return (_ctx, _cache) => {
             }, {
               default: _withCtx(() => [
                 _createVNode(_component_v_icon, { left: "" }, {
-                  default: _withCtx(() => _cache[9] || (_cache[9] = [
+                  default: _withCtx(() => _cache[11] || (_cache[11] = [
                     _createTextVNode("mdi-close")
                   ])),
                   _: 1
@@ -345,7 +364,7 @@ return (_ctx, _cache) => {
           ]),
           default: _withCtx(() => [
             _createVNode(_component_v_card_title, null, {
-              default: _withCtx(() => _cache[8] || (_cache[8] = [
+              default: _withCtx(() => _cache[10] || (_cache[10] = [
                 _createTextVNode("插件配置")
               ])),
               _: 1
@@ -383,11 +402,11 @@ return (_ctx, _cache) => {
               ref_key: "form",
               ref: form,
               modelValue: isFormValid.value,
-              "onUpdate:modelValue": _cache[7] || (_cache[7] = $event => ((isFormValid).value = $event)),
+              "onUpdate:modelValue": _cache[9] || (_cache[9] = $event => ((isFormValid).value = $event)),
               onSubmit: _withModifiers(saveConfig, ["prevent"])
             }, {
               default: _withCtx(() => [
-                _cache[12] || (_cache[12] = _createElementVNode("div", { class: "text-subtitle-1 font-weight-bold mt-4 mb-2" }, "基本设置", -1)),
+                _cache[15] || (_cache[15] = _createElementVNode("div", { class: "text-subtitle-1 font-weight-bold mt-4 mb-2" }, "基本设置", -1)),
                 _createVNode(_component_v_row, null, {
                   default: _withCtx(() => [
                     _createVNode(_component_v_col, { cols: "12" }, {
@@ -407,7 +426,7 @@ return (_ctx, _cache) => {
                   ]),
                   _: 1
                 }),
-                _cache[13] || (_cache[13] = _createElementVNode("div", { class: "text-subtitle-1 font-weight-bold mt-4 mb-2" }, "MCP Server配置", -1)),
+                _cache[16] || (_cache[16] = _createElementVNode("div", { class: "text-subtitle-1 font-weight-bold mt-4 mb-2" }, "MCP Server配置", -1)),
                 _createVNode(_component_v_row, null, {
                   default: _withCtx(() => [
                     _createVNode(_component_v_col, {
@@ -456,7 +475,7 @@ return (_ctx, _cache) => {
                                   }), {
                                     default: _withCtx(() => [
                                       _createVNode(_component_v_icon, null, {
-                                        default: _withCtx(() => _cache[10] || (_cache[10] = [
+                                        default: _withCtx(() => _cache[12] || (_cache[12] = [
                                           _createTextVNode("mdi-content-copy")
                                         ])),
                                         _: 1
@@ -479,7 +498,7 @@ return (_ctx, _cache) => {
                                   }), {
                                     default: _withCtx(() => [
                                       _createVNode(_component_v_icon, null, {
-                                        default: _withCtx(() => _cache[11] || (_cache[11] = [
+                                        default: _withCtx(() => _cache[13] || (_cache[13] = [
                                           _createTextVNode("mdi-key-change")
                                         ])),
                                         _: 1
@@ -500,7 +519,7 @@ return (_ctx, _cache) => {
                   ]),
                   _: 1
                 }),
-                _cache[14] || (_cache[14] = _createElementVNode("div", { class: "text-subtitle-1 font-weight-bold mt-4 mb-2" }, "MoviePilot 认证配置", -1)),
+                _cache[17] || (_cache[17] = _createElementVNode("div", { class: "text-subtitle-1 font-weight-bold mt-4 mb-2" }, "MoviePilot 认证配置", -1)),
                 _createVNode(_component_v_row, null, {
                   default: _withCtx(() => [
                     _createVNode(_component_v_col, {
@@ -542,6 +561,58 @@ return (_ctx, _cache) => {
                     })
                   ]),
                   _: 1
+                }),
+                _cache[18] || (_cache[18] = _createElementVNode("div", { class: "text-subtitle-1 font-weight-bold mt-4 mb-2" }, "Dashboard 配置", -1)),
+                _createVNode(_component_v_row, null, {
+                  default: _withCtx(() => [
+                    _createVNode(_component_v_col, {
+                      cols: "12",
+                      md: "6"
+                    }, {
+                      default: _withCtx(() => [
+                        _createVNode(_component_v_select, {
+                          modelValue: config.dashboard_refresh_interval,
+                          "onUpdate:modelValue": _cache[7] || (_cache[7] = $event => ((config.dashboard_refresh_interval) = $event)),
+                          label: "状态刷新间隔",
+                          variant: "outlined",
+                          items: refreshIntervalOptions,
+                          "item-title": "label",
+                          "item-value": "value",
+                          hint: "Dashboard状态信息的自动刷新间隔时间",
+                          "persistent-hint": ""
+                        }, {
+                          "prepend-inner": _withCtx(() => [
+                            _createVNode(_component_v_icon, { color: "primary" }, {
+                              default: _withCtx(() => _cache[14] || (_cache[14] = [
+                                _createTextVNode("mdi-refresh")
+                              ])),
+                              _: 1
+                            })
+                          ]),
+                          _: 1
+                        }, 8, ["modelValue"])
+                      ]),
+                      _: 1
+                    }),
+                    _createVNode(_component_v_col, {
+                      cols: "12",
+                      md: "6"
+                    }, {
+                      default: _withCtx(() => [
+                        _createVNode(_component_v_switch, {
+                          modelValue: config.dashboard_auto_refresh,
+                          "onUpdate:modelValue": _cache[8] || (_cache[8] = $event => ((config.dashboard_auto_refresh) = $event)),
+                          label: "启用自动刷新",
+                          color: "primary",
+                          inset: "",
+                          hint: "是否启用Dashboard的自动刷新功能",
+                          "persistent-hint": ""
+                        }, null, 8, ["modelValue"])
+                      ]),
+                      _: 1
+                    })
+                  ]),
+                  _: 1
                 })
               ]),
               _: 1
@@ -556,7 +627,7 @@ return (_ctx, _cache) => {
               onClick: resetForm,
               variant: "text"
             }, {
-              default: _withCtx(() => _cache[15] || (_cache[15] = [
+              default: _withCtx(() => _cache[19] || (_cache[19] = [
                 _createTextVNode("重置")
               ])),
               _: 1
@@ -567,7 +638,7 @@ return (_ctx, _cache) => {
               "prepend-icon": "mdi-arrow-left",
               variant: "text"
             }, {
-              default: _withCtx(() => _cache[16] || (_cache[16] = [
+              default: _withCtx(() => _cache[20] || (_cache[20] = [
                 _createTextVNode("返回服务器状态")
               ])),
               _: 1
@@ -579,7 +650,7 @@ return (_ctx, _cache) => {
               onClick: saveConfig,
               loading: saving.value
             }, {
-              default: _withCtx(() => _cache[17] || (_cache[17] = [
+              default: _withCtx(() => _cache[21] || (_cache[21] = [
                 _createTextVNode("保存配置")
               ])),
               _: 1
@@ -595,6 +666,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const ConfigComponent = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-903968ef"]]);
+const ConfigComponent = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-c203395b"]]);
 
 export { ConfigComponent as default };

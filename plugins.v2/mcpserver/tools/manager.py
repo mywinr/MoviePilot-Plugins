@@ -9,6 +9,7 @@ from .media.subscribe import SubscribeTool
 from .media.download import MovieDownloadTool
 from .media.recognize import MediaRecognizeTool
 from .prompt.media_prompt import MediaPromptTool
+from .system.process_monitor import ProcessMonitorTool
 
 
 # Configure logging
@@ -31,7 +32,8 @@ class ToolManager:
             SubscribeTool,
             MovieDownloadTool,
             MediaRecognizeTool,
-            MediaPromptTool
+            MediaPromptTool,
+            ProcessMonitorTool
         ]
 
         for tool_class in tools:

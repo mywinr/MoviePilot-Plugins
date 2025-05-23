@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [
     vue(),
     federation({
-      name: 'mcpserver',
+      name: 'MCPServer',
       filename: 'remoteEntry.js',
       exposes: {
         './Page': './src/components/Page.vue',
@@ -61,7 +61,7 @@ export default defineConfig({
             // 过滤掉所有vuetify相关的CSS
             root.walkRules(rule => {
               if (rule.selector && (
-                  rule.selector.includes('.v-') || 
+                  rule.selector.includes('.v-') ||
                   rule.selector.includes('.mdi-'))) {
                 rule.remove();
               }
@@ -76,4 +76,4 @@ export default defineConfig({
     cors: true,   // 启用CORS
     origin: 'http://localhost:5001'
   },
-}) 
+})

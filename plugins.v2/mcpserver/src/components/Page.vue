@@ -80,6 +80,76 @@
               </v-list>
             </v-card-text>
           </v-card>
+
+          <!-- 进程监控卡片 -->
+          <v-card v-if="serverStatus.running && processStats" flat class="rounded mb-3 border config-card">
+            <v-card-title class="text-caption d-flex align-center px-3 py-2 bg-success-lighten-5">
+              <v-icon icon="mdi-monitor" class="mr-2" color="success" size="small" />
+              <span>进程监控</span>
+              <v-spacer />
+              <v-chip size="x-small" color="success" variant="tonal">
+                PID: {{ processStats.pid }}
+              </v-chip>
+            </v-card-title>
+            <v-card-text class="pa-0">
+              <v-list class="bg-transparent pa-0">
+                <v-list-item class="px-3 py-1">
+                  <template v-slot:prepend>
+                    <v-icon :color="getCpuColor(processStats.cpu_percent)" icon="mdi-cpu-64-bit" size="small" />
+                  </template>
+                  <v-list-item-title class="text-caption">CPU使用率</v-list-item-title>
+                  <template v-slot:append>
+                    <v-chip
+                      :color="getCpuColor(processStats.cpu_percent)"
+                      size="x-small"
+                      variant="tonal"
+                    >
+                      {{ (processStats.cpu_percent || 0).toFixed(1) }}%
+                    </v-chip>
+                  </template>
+                </v-list-item>
+                <v-divider class="my-1"></v-divider>
+                <v-list-item class="px-3 py-1">
+                  <template v-slot:prepend>
+                    <v-icon :color="getMemoryColor(processStats.memory_percent)" icon="mdi-memory" size="small" />
+                  </template>
+                  <v-list-item-title class="text-caption">内存使用</v-list-item-title>
+                  <template v-slot:append>
+                    <div class="text-right">
+                      <div class="text-caption">{{ (processStats.memory_mb || 0).toFixed(1) }}MB</div>
+                      <v-chip
+                        :color="getMemoryColor(processStats.memory_percent)"
+                        size="x-small"
+                        variant="tonal"
+                      >
+                        {{ (processStats.memory_percent || 0).toFixed(1) }}%
+                      </v-chip>
+                    </div>
+                  </template>
+                </v-list-item>
+                <v-divider class="my-1"></v-divider>
+                <v-list-item class="px-3 py-1">
+                  <template v-slot:prepend>
+                    <v-icon icon="mdi-clock-outline" color="info" size="small" />
+                  </template>
+                  <v-list-item-title class="text-caption">运行时长</v-list-item-title>
+                  <template v-slot:append>
+                    <span class="text-caption">{{ processStats.runtime || '未知' }}</span>
+                  </template>
+                </v-list-item>
+                <v-divider class="my-1"></v-divider>
+                <v-list-item class="px-3 py-1">
+                  <template v-slot:prepend>
+                    <v-icon icon="mdi-connection" color="primary" size="small" />
+                  </template>
+                  <v-list-item-title class="text-caption">线程/连接</v-list-item-title>
+                  <template v-slot:append>
+                    <span class="text-caption">{{ processStats.num_threads || 0 }}线程 / {{ processStats.connections || 0 }}连接</span>
+                  </template>
+                </v-list-item>
+              </v-list>
+            </v-card-text>
+          </v-card>
         </div>
       </v-card-text>
 
@@ -191,7 +261,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, onUnmounted } from 'vue'
 
 // 接收初始配置
 const props = defineProps({
@@ -227,6 +297,12 @@ const serverStatus = reactive({
   requires_auth: true
 })
 
+// 进程统计信息
+const processStats = ref(null)
+
+// 定时器 - 已移除自动刷新功能，用户可手动点击刷新按钮
+// let refreshTimer = null
+
 // 自定义事件，用于通知主应用刷新数据
 const emit = defineEmits(['action', 'switch', 'close'])
 
@@ -249,8 +325,15 @@ async function fetchServerStatus() {
 
   try {
     console.log('尝试直接获取服务器状态...')
-    const statusData = await props.api.get(`plugin/${pluginId}/status`)
+
+    // 并行获取服务器状态和进程统计信息
+    const [statusData, processStatsData] = await Promise.all([
+      props.api.get(`plugin/${pluginId}/status`),
+      props.api.get(`plugin/${pluginId}/process-stats`).catch(() => null) // 进程统计可能失败，不影响主流程
+    ])
+
     console.log('直接获取的状态数据:', statusData)
+    console.log('进程统计数据:', processStatsData)
 
     if (statusData) {
       // 更新服务器状态
@@ -261,6 +344,13 @@ async function fetchServerStatus() {
       // 更新插件启用状态
       if ('enable' in statusData) {
         pluginEnabled.value = statusData.enable
+      }
+
+      // 更新进程统计信息
+      if (processStatsData && processStatsData.process_stats && !processStatsData.error) {
+        processStats.value = processStatsData.process_stats
+      } else {
+        processStats.value = null
       }
 
       initialDataLoaded.value = true
@@ -454,6 +544,20 @@ function notifyClose() {
   emit('close')
 }
 
+// 获取CPU使用率颜色
+function getCpuColor(cpuPercent) {
+  if (cpuPercent > 80) return 'error'
+  if (cpuPercent > 50) return 'warning'
+  return 'success'
+}
+
+// 获取内存使用率颜色
+function getMemoryColor(memoryPercent) {
+  if (memoryPercent > 80) return 'error'
+  if (memoryPercent > 60) return 'warning'
+  return 'success'
+}
+
 
 
 // 显示消息的辅助函数
@@ -463,9 +567,37 @@ function showMessage(message, type = 'info') {
   setTimeout(() => { actionMessage.value = null }, 3000)
 }
 
+// 已移除自动刷新功能 - 用户可手动点击"刷新状态"按钮获取最新信息
+// function setupRefreshTimer() {
+//   // 清除现有定时器
+//   if (refreshTimer) {
+//     clearInterval(refreshTimer)
+//   }
+//
+//   // 每15秒刷新一次进程监控信息
+//   refreshTimer = setInterval(() => {
+//     if (serverStatus.running) {
+//       fetchServerStatus()
+//     }
+//   }, 15000)
+// }
+
+// function clearRefreshTimer() {
+//   if (refreshTimer) {
+//     clearInterval(refreshTimer)
+//     refreshTimer = null
+//   }
+// }
+
 // 组件挂载时加载数据
 onMounted(() => {
   fetchServerStatus()
+  // 已移除自动刷新定时器，用户可手动点击"刷新状态"按钮
+})
+
+// 组件卸载时的清理工作
+onUnmounted(() => {
+  // 已移除定时器相关的清理工作
 })
 </script>
 
@@ -478,6 +610,10 @@ onMounted(() => {
 
 .bg-primary-lighten-5 {
   background-color: rgba(var(--v-theme-primary), 0.07);
+}
+
+.bg-success-lighten-5 {
+  background-color: rgba(var(--v-theme-success), 0.07);
 }
 
 .border {

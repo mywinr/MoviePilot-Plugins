@@ -11,18 +11,22 @@ const _hoisted_2 = {
 };
 const _hoisted_3 = { class: "text-caption" };
 const _hoisted_4 = { class: "text-caption" };
-const _hoisted_5 = { class: "action-section mb-3" };
-const _hoisted_6 = { class: "section-title mb-2" };
-const _hoisted_7 = { class: "d-flex justify-space-between ga-2" };
-const _hoisted_8 = { class: "action-section" };
-const _hoisted_9 = { class: "section-title mb-2" };
-const _hoisted_10 = { class: "server-controls" };
-const _hoisted_11 = {
+const _hoisted_5 = { class: "text-right" };
+const _hoisted_6 = { class: "text-caption" };
+const _hoisted_7 = { class: "text-caption" };
+const _hoisted_8 = { class: "text-caption" };
+const _hoisted_9 = { class: "action-section mb-3" };
+const _hoisted_10 = { class: "section-title mb-2" };
+const _hoisted_11 = { class: "d-flex justify-space-between ga-2" };
+const _hoisted_12 = { class: "action-section" };
+const _hoisted_13 = { class: "section-title mb-2" };
+const _hoisted_14 = { class: "server-controls" };
+const _hoisted_15 = {
   key: 1,
   class: "d-flex ga-2"
 };
 
-const {ref,reactive,onMounted} = await importShared('vue');
+const {ref,reactive,onMounted,onUnmounted} = await importShared('vue');
 
 
 // 接收初始配置
@@ -66,6 +70,12 @@ const serverStatus = reactive({
   requires_auth: true
 });
 
+// 进程统计信息
+const processStats = ref(null);
+
+// 定时器 - 已移除自动刷新功能，用户可手动点击刷新按钮
+// let refreshTimer = null
+
 // 自定义事件，用于通知主应用刷新数据
 const emit = __emit;
 
@@ -84,8 +94,15 @@ async function fetchServerStatus() {
 
   try {
     console.log('尝试直接获取服务器状态...');
-    const statusData = await props.api.get(`plugin/${pluginId}/status`);
+
+    // 并行获取服务器状态和进程统计信息
+    const [statusData, processStatsData] = await Promise.all([
+      props.api.get(`plugin/${pluginId}/status`),
+      props.api.get(`plugin/${pluginId}/process-stats`).catch(() => null) // 进程统计可能失败，不影响主流程
+    ]);
+
     console.log('直接获取的状态数据:', statusData);
+    console.log('进程统计数据:', processStatsData);
 
     if (statusData) {
       // 更新服务器状态
@@ -96,6 +113,13 @@ async function fetchServerStatus() {
       // 更新插件启用状态
       if ('enable' in statusData) {
         pluginEnabled.value = statusData.enable;
+      }
+
+      // 更新进程统计信息
+      if (processStatsData && processStatsData.process_stats && !processStatsData.error) {
+        processStats.value = processStatsData.process_stats;
+      } else {
+        processStats.value = null;
       }
 
       initialDataLoaded.value = true;
@@ -277,9 +301,51 @@ function notifyClose() {
   emit('close');
 }
 
+// 获取CPU使用率颜色
+function getCpuColor(cpuPercent) {
+  if (cpuPercent > 80) return 'error'
+  if (cpuPercent > 50) return 'warning'
+  return 'success'
+}
+
+// 获取内存使用率颜色
+function getMemoryColor(memoryPercent) {
+  if (memoryPercent > 80) return 'error'
+  if (memoryPercent > 60) return 'warning'
+  return 'success'
+}
+
+// 已移除自动刷新功能 - 用户可手动点击"刷新状态"按钮获取最新信息
+// function setupRefreshTimer() {
+//   // 清除现有定时器
+//   if (refreshTimer) {
+//     clearInterval(refreshTimer)
+//   }
+//
+//   // 每15秒刷新一次进程监控信息
+//   refreshTimer = setInterval(() => {
+//     if (serverStatus.running) {
+//       fetchServerStatus()
+//     }
+//   }, 15000)
+// }
+
+// function clearRefreshTimer() {
+//   if (refreshTimer) {
+//     clearInterval(refreshTimer)
+//     refreshTimer = null
+//   }
+// }
+
 // 组件挂载时加载数据
 onMounted(() => {
   fetchServerStatus();
+  // 已移除自动刷新定时器，用户可手动点击"刷新状态"按钮
+});
+
+// 组件卸载时的清理工作
+onUnmounted(() => {
+  // 已移除定时器相关的清理工作
 });
 
 return (_ctx, _cache) => {
@@ -294,6 +360,7 @@ return (_ctx, _cache) => {
   const _component_v_list = _resolveComponent("v-list");
   const _component_v_card_text = _resolveComponent("v-card-text");
   const _component_v_card = _resolveComponent("v-card");
+  const _component_v_spacer = _resolveComponent("v-spacer");
   const _component_v_btn = _resolveComponent("v-btn");
 
   return (_openBlock(), _createElementBlock("div", _hoisted_1, [
@@ -502,7 +569,159 @@ return (_ctx, _cache) => {
                       })
                     ]),
                     _: 1
-                  })
+                  }),
+                  (serverStatus.running && processStats.value)
+                    ? (_openBlock(), _createBlock(_component_v_card, {
+                        key: 0,
+                        flat: "",
+                        class: "rounded mb-3 border config-card"
+                      }, {
+                        default: _withCtx(() => [
+                          _createVNode(_component_v_card_title, { class: "text-caption d-flex align-center px-3 py-2 bg-success-lighten-5" }, {
+                            default: _withCtx(() => [
+                              _createVNode(_component_v_icon, {
+                                icon: "mdi-monitor",
+                                class: "mr-2",
+                                color: "success",
+                                size: "small"
+                              }),
+                              _cache[7] || (_cache[7] = _createElementVNode("span", null, "进程监控", -1)),
+                              _createVNode(_component_v_spacer),
+                              _createVNode(_component_v_chip, {
+                                size: "x-small",
+                                color: "success",
+                                variant: "tonal"
+                              }, {
+                                default: _withCtx(() => [
+                                  _createTextVNode(" PID: " + _toDisplayString(processStats.value.pid), 1)
+                                ]),
+                                _: 1
+                              })
+                            ]),
+                            _: 1
+                          }),
+                          _createVNode(_component_v_card_text, { class: "pa-0" }, {
+                            default: _withCtx(() => [
+                              _createVNode(_component_v_list, { class: "bg-transparent pa-0" }, {
+                                default: _withCtx(() => [
+                                  _createVNode(_component_v_list_item, { class: "px-3 py-1" }, {
+                                    prepend: _withCtx(() => [
+                                      _createVNode(_component_v_icon, {
+                                        color: getCpuColor(processStats.value.cpu_percent),
+                                        icon: "mdi-cpu-64-bit",
+                                        size: "small"
+                                      }, null, 8, ["color"])
+                                    ]),
+                                    append: _withCtx(() => [
+                                      _createVNode(_component_v_chip, {
+                                        color: getCpuColor(processStats.value.cpu_percent),
+                                        size: "x-small",
+                                        variant: "tonal"
+                                      }, {
+                                        default: _withCtx(() => [
+                                          _createTextVNode(_toDisplayString((processStats.value.cpu_percent || 0).toFixed(1)) + "% ", 1)
+                                        ]),
+                                        _: 1
+                                      }, 8, ["color"])
+                                    ]),
+                                    default: _withCtx(() => [
+                                      _createVNode(_component_v_list_item_title, { class: "text-caption" }, {
+                                        default: _withCtx(() => _cache[8] || (_cache[8] = [
+                                          _createTextVNode("CPU使用率")
+                                        ])),
+                                        _: 1
+                                      })
+                                    ]),
+                                    _: 1
+                                  }),
+                                  _createVNode(_component_v_divider, { class: "my-1" }),
+                                  _createVNode(_component_v_list_item, { class: "px-3 py-1" }, {
+                                    prepend: _withCtx(() => [
+                                      _createVNode(_component_v_icon, {
+                                        color: getMemoryColor(processStats.value.memory_percent),
+                                        icon: "mdi-memory",
+                                        size: "small"
+                                      }, null, 8, ["color"])
+                                    ]),
+                                    append: _withCtx(() => [
+                                      _createElementVNode("div", _hoisted_5, [
+                                        _createElementVNode("div", _hoisted_6, _toDisplayString((processStats.value.memory_mb || 0).toFixed(1)) + "MB", 1),
+                                        _createVNode(_component_v_chip, {
+                                          color: getMemoryColor(processStats.value.memory_percent),
+                                          size: "x-small",
+                                          variant: "tonal"
+                                        }, {
+                                          default: _withCtx(() => [
+                                            _createTextVNode(_toDisplayString((processStats.value.memory_percent || 0).toFixed(1)) + "% ", 1)
+                                          ]),
+                                          _: 1
+                                        }, 8, ["color"])
+                                      ])
+                                    ]),
+                                    default: _withCtx(() => [
+                                      _createVNode(_component_v_list_item_title, { class: "text-caption" }, {
+                                        default: _withCtx(() => _cache[9] || (_cache[9] = [
+                                          _createTextVNode("内存使用")
+                                        ])),
+                                        _: 1
+                                      })
+                                    ]),
+                                    _: 1
+                                  }),
+                                  _createVNode(_component_v_divider, { class: "my-1" }),
+                                  _createVNode(_component_v_list_item, { class: "px-3 py-1" }, {
+                                    prepend: _withCtx(() => [
+                                      _createVNode(_component_v_icon, {
+                                        icon: "mdi-clock-outline",
+                                        color: "info",
+                                        size: "small"
+                                      })
+                                    ]),
+                                    append: _withCtx(() => [
+                                      _createElementVNode("span", _hoisted_7, _toDisplayString(processStats.value.runtime || '未知'), 1)
+                                    ]),
+                                    default: _withCtx(() => [
+                                      _createVNode(_component_v_list_item_title, { class: "text-caption" }, {
+                                        default: _withCtx(() => _cache[10] || (_cache[10] = [
+                                          _createTextVNode("运行时长")
+                                        ])),
+                                        _: 1
+                                      })
+                                    ]),
+                                    _: 1
+                                  }),
+                                  _createVNode(_component_v_divider, { class: "my-1" }),
+                                  _createVNode(_component_v_list_item, { class: "px-3 py-1" }, {
+                                    prepend: _withCtx(() => [
+                                      _createVNode(_component_v_icon, {
+                                        icon: "mdi-connection",
+                                        color: "primary",
+                                        size: "small"
+                                      })
+                                    ]),
+                                    append: _withCtx(() => [
+                                      _createElementVNode("span", _hoisted_8, _toDisplayString(processStats.value.num_threads || 0) + "线程 / " + _toDisplayString(processStats.value.connections || 0) + "连接", 1)
+                                    ]),
+                                    default: _withCtx(() => [
+                                      _createVNode(_component_v_list_item_title, { class: "text-caption" }, {
+                                        default: _withCtx(() => _cache[11] || (_cache[11] = [
+                                          _createTextVNode("线程/连接")
+                                        ])),
+                                        _: 1
+                                      })
+                                    ]),
+                                    _: 1
+                                  })
+                                ]),
+                                _: 1
+                              })
+                            ]),
+                            _: 1
+                          })
+                        ]),
+                        _: 1
+                      }))
+                    : _createCommentVNode("", true)
                 ]))
               : _createCommentVNode("", true)
           ]),
@@ -511,17 +730,17 @@ return (_ctx, _cache) => {
         _createVNode(_component_v_divider),
         _createVNode(_component_v_card_text, { class: "px-3 py-3" }, {
           default: _withCtx(() => [
-            _createElementVNode("div", _hoisted_5, [
-              _createElementVNode("div", _hoisted_6, [
+            _createElementVNode("div", _hoisted_9, [
+              _createElementVNode("div", _hoisted_10, [
                 _createVNode(_component_v_icon, {
                   icon: "mdi-lightning-bolt",
                   size: "small",
                   color: "primary",
                   class: "mr-1"
                 }),
-                _cache[7] || (_cache[7] = _createElementVNode("span", { class: "text-caption font-weight-medium" }, "快捷操作", -1))
+                _cache[12] || (_cache[12] = _createElementVNode("span", { class: "text-caption font-weight-medium" }, "快捷操作", -1))
               ]),
-              _createElementVNode("div", _hoisted_7, [
+              _createElementVNode("div", _hoisted_11, [
                 _createVNode(_component_v_btn, {
                   color: "primary",
                   onClick: notifySwitch,
@@ -531,7 +750,7 @@ return (_ctx, _cache) => {
                   class: "flex-1 action-btn",
                   elevation: "2"
                 }, {
-                  default: _withCtx(() => _cache[8] || (_cache[8] = [
+                  default: _withCtx(() => _cache[13] || (_cache[13] = [
                     _createTextVNode(" 配置 ")
                   ])),
                   _: 1
@@ -546,7 +765,7 @@ return (_ctx, _cache) => {
                   class: "flex-1 action-btn",
                   elevation: "2"
                 }, {
-                  default: _withCtx(() => _cache[9] || (_cache[9] = [
+                  default: _withCtx(() => _cache[14] || (_cache[14] = [
                     _createTextVNode(" 刷新状态 ")
                   ])),
                   _: 1
@@ -560,24 +779,24 @@ return (_ctx, _cache) => {
                   class: "flex-1 action-btn",
                   elevation: "2"
                 }, {
-                  default: _withCtx(() => _cache[10] || (_cache[10] = [
+                  default: _withCtx(() => _cache[15] || (_cache[15] = [
                     _createTextVNode(" 关闭 ")
                   ])),
                   _: 1
                 })
               ])
             ]),
-            _createElementVNode("div", _hoisted_8, [
-              _createElementVNode("div", _hoisted_9, [
+            _createElementVNode("div", _hoisted_12, [
+              _createElementVNode("div", _hoisted_13, [
                 _createVNode(_component_v_icon, {
                   icon: "mdi-server",
                   size: "small",
                   color: "primary",
                   class: "mr-1"
                 }),
-                _cache[11] || (_cache[11] = _createElementVNode("span", { class: "text-caption font-weight-medium" }, "服务器控制", -1))
+                _cache[16] || (_cache[16] = _createElementVNode("span", { class: "text-caption font-weight-medium" }, "服务器控制", -1))
               ]),
-              _createElementVNode("div", _hoisted_10, [
+              _createElementVNode("div", _hoisted_14, [
                 (!serverStatus.running)
                   ? (_openBlock(), _createBlock(_component_v_btn, {
                       key: 0,
@@ -597,13 +816,13 @@ return (_ctx, _cache) => {
                           icon: "mdi-play",
                           class: "mr-2"
                         }),
-                        _cache[12] || (_cache[12] = _createTextVNode(" 启动服务器 "))
+                        _cache[17] || (_cache[17] = _createTextVNode(" 启动服务器 "))
                       ]),
                       _: 1
                     }, 8, ["loading", "disabled"]))
                   : _createCommentVNode("", true),
                 (serverStatus.running)
-                  ? (_openBlock(), _createElementBlock("div", _hoisted_11, [
+                  ? (_openBlock(), _createElementBlock("div", _hoisted_15, [
                       _createVNode(_component_v_btn, {
                         color: "warning",
                         onClick: stopServer,
@@ -615,7 +834,7 @@ return (_ctx, _cache) => {
                         class: "flex-1 server-btn stop-btn",
                         elevation: "3"
                       }, {
-                        default: _withCtx(() => _cache[13] || (_cache[13] = [
+                        default: _withCtx(() => _cache[18] || (_cache[18] = [
                           _createTextVNode(" 停止服务器 ")
                         ])),
                         _: 1
@@ -631,7 +850,7 @@ return (_ctx, _cache) => {
                         class: "flex-1 server-btn restart-btn",
                         elevation: "3"
                       }, {
-                        default: _withCtx(() => _cache[14] || (_cache[14] = [
+                        default: _withCtx(() => _cache[19] || (_cache[19] = [
                           _createTextVNode(" 重启服务器 ")
                         ])),
                         _: 1
@@ -651,6 +870,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const PageComponent = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-7922d057"]]);
+const PageComponent = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-645feede"]]);
 
 export { PageComponent as default };

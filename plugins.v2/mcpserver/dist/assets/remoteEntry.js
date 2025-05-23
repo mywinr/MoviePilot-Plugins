@@ -2,14 +2,14 @@ const currentImports = {};
       const exportSet = new Set(['Module', '__esModule', 'default', '_export_sfc']);
       let moduleMap = {
 "./Page":()=>{
-      dynamicLoadingCss(["__federation_expose_Page-CK_iLIYk.css"], false, './Page');
-      return __federation_import('./__federation_expose_Page-BKdtFQfJ.js').then(module =>Object.keys(module).every(item => exportSet.has(item)) ? () => module.default : () => module)},
+      dynamicLoadingCss(["__federation_expose_Page-CtUrE8bk.css"], false, './Page');
+      return __federation_import('./__federation_expose_Page-B8F-rpH1.js').then(module =>Object.keys(module).every(item => exportSet.has(item)) ? () => module.default : () => module)},
 "./Config":()=>{
-      dynamicLoadingCss(["__federation_expose_Config-DTBl5hmW.css"], false, './Config');
-      return __federation_import('./__federation_expose_Config-DqaO7Hz0.js').then(module =>Object.keys(module).every(item => exportSet.has(item)) ? () => module.default : () => module)},
+      dynamicLoadingCss(["__federation_expose_Config-CbiqvgLx.css"], false, './Config');
+      return __federation_import('./__federation_expose_Config-C5oAcYm5.js').then(module =>Object.keys(module).every(item => exportSet.has(item)) ? () => module.default : () => module)},
 "./Dashboard":()=>{
-      dynamicLoadingCss([], false, './Dashboard');
-      return __federation_import('./__federation_expose_Dashboard-BkyO-3pr.js').then(module =>Object.keys(module).every(item => exportSet.has(item)) ? () => module.default : () => module)},};
+      dynamicLoadingCss(["__federation_expose_Dashboard-C9XYMld5.css"], false, './Dashboard');
+      return __federation_import('./__federation_expose_Dashboard-DjEr3U8x.js').then(module =>Object.keys(module).every(item => exportSet.has(item)) ? () => module.default : () => module)},};
       const seen = {};
       const dynamicLoadingCss = (cssFilePaths, dontAppendStylesToHead, exposeItemName) => {
         const metaUrl = import.meta.url;
@@ -50,7 +50,7 @@ const currentImports = {};
          }
          
           if (dontAppendStylesToHead) {
-            const key = 'css__mcpserver__' + exposeItemName;
+            const key = 'css__MCPServer__' + exposeItemName;
             window[key] = window[key] || [];
             window[key].push(href);
             return;

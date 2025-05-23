@@ -35,11 +35,10 @@ class MCPServer(_PluginBase):
     plugin_desc = "使用MCP客户端通过大模型来操作MoviePilot"
     # 插件图标
     plugin_icon = (
-        "https://raw.githubusercontent.com/DzAvril/"
-        "MoviePilot-Plugins/main/icons/mcp.png"
+        "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/mcp.png"
     )
     # 插件版本
-    plugin_version = "1.3"
+    plugin_version = "1.4"
     # 插件作者
     plugin_author = "DzAvril"
     # 作者主页
@@ -730,7 +729,8 @@ class MCPServer(_PluginBase):
             "venv_path": str(self._venv_path) if self._venv_path else None,
             "python_bin": str(self._python_bin) if self._python_bin else None,
             "auth_token": self._mask_token(self._config.get("auth_token", "")),
-            "requires_auth": True
+            "requires_auth": True,
+            "resource_usage": None
         }
 
         # 设置服务URL
@@ -817,6 +817,15 @@ class MCPServer(_PluginBase):
             if process_running:
                 logger.info("虽然健康检查请求失败，但进程正在运行，标记为运行状态")
 
+        # 如果服务器正在运行且有PID，获取资源占用信息
+        if status["running"] and status["pid"]:
+            try:
+                resource_usage = self._get_process_resource_usage(status["pid"])
+                status["resource_usage"] = resource_usage
+            except Exception as e:
+                logger.debug(f"获取进程资源占用信息失败: {str(e)}")
+                status["resource_usage"] = None
+
         # 最终状态日志
         logger.info(
             "服务器状态: running=%s, health=%s, pid=%s",
@@ -884,6 +893,60 @@ class MCPServer(_PluginBase):
             logger.error(traceback.format_exc())
             return False
 
+    def _get_process_resource_usage(self, pid: int) -> Optional[Dict[str, Any]]:
+        """获取指定进程的资源占用信息"""
+        try:
+            import psutil
+            from datetime import datetime
+
+            proc = psutil.Process(pid)
+
+            # 获取进程信息
+            with proc.oneshot():
+                # CPU和内存信息
+                cpu_percent = proc.cpu_percent(interval=0.1)  # 0.1秒采样间隔
+                memory_info = proc.memory_info()
+                memory_percent = proc.memory_percent()
+
+                # 线程和文件描述符
+                num_threads = proc.num_threads()
+                try:
+                    num_fds = proc.num_fds() if hasattr(proc, 'num_fds') else 0
+                except (psutil.AccessDenied, AttributeError):
+                    num_fds = 0
+
+                # 计算运行时长
+                runtime_seconds = time.time() - proc.create_time()
+                runtime_hours = runtime_seconds / 3600
+                if runtime_hours < 1:
+                    runtime = f"{runtime_seconds / 60:.1f} 分钟"
+                elif runtime_hours < 24:
+                    runtime = f"{runtime_hours:.1f} 小时"
+                else:
+                    runtime = f"{runtime_hours / 24:.1f} 天"
+
+                return {
+                    'cpu_percent': cpu_percent,
+                    'memory_mb': memory_info.rss / 1024 / 1024,  # 物理内存 MB
+                    'memory_percent': memory_percent,
+                    'runtime': runtime,
+                    'num_threads': num_threads,
+                    'num_fds': num_fds
+                }
+
+        except ImportError:
+            logger.debug("psutil模块未安装，无法获取进程资源信息")
+            return None
+        except psutil.NoSuchProcess:
+            logger.debug(f"进程 {pid} 不存在")
+            return None
+        except psutil.AccessDenied:
+            logger.debug(f"无权限访问进程 {pid}")
+            return None
+        except Exception as e:
+            logger.debug(f"获取进程 {pid} 资源信息时出错: {str(e)}")
+            return None
+
     def _mask_token(self, token: str) -> str:
         """掩盖token，只显示前4位和后4位"""
         if not token or len(token) < 10:
@@ -928,13 +991,7 @@ class MCPServer(_PluginBase):
             }
 
     def get_state(self) -> bool:
-        """获取服务器状态"""
-        # 使用_get_server_status方法获取完整状态，保持一致性
-        status = self._get_server_status()
-        # 如果服务器正在运行，返回True
-        if status["running"]:
-            return True
-        # 否则返回插件启用状态
+        """获取插件状态"""
         return self._enable
 
     # --- Instance methods for API endpoints ---
@@ -1172,6 +1229,13 @@ class MCPServer(_PluginBase):
                 "methods": ["POST"],
                 "auth": "bear",
                 "summary": "下载种子"
+            },
+            {
+                "path": "/process-stats",
+                "endpoint": self._get_process_stats_api,
+                "methods": ["GET"],
+                "auth": "bear",
+                "summary": "获取MCP服务器进程资源占用统计"
             }
         ]
 
@@ -1316,6 +1380,118 @@ class MCPServer(_PluginBase):
                     "pid": None,
                     "url": None
                 }
+            }
+
+    def _get_process_stats_api(self) -> Dict[str, Any]:
+        """API Endpoint: 获取MCP服务器进程资源占用统计"""
+        try:
+            # 获取服务器状态，包含PID信息
+            status = self._get_server_status()
+
+            if not status["running"] or not status["pid"]:
+                return {
+                    "message": "MCP服务器未运行或无法获取进程ID",
+                    "error": True,
+                    "process_stats": None
+                }
+
+            pid = status["pid"]
+
+            # 获取详细的进程资源统计
+            try:
+                import psutil
+
+                proc = psutil.Process(pid)
+
+                # 获取进程信息
+                with proc.oneshot():
+                    # 基本信息
+                    name = proc.name()
+                    status_str = proc.status()
+                    create_time_timestamp = proc.create_time()  # 保持原始时间戳
+
+                    # CPU和内存信息
+                    cpu_percent = proc.cpu_percent(interval=0.5)  # 0.5秒采样间隔
+                    memory_info = proc.memory_info()
+                    memory_percent = proc.memory_percent()
+
+                    # 线程和文件描述符
+                    num_threads = proc.num_threads()
+                    try:
+                        num_fds = proc.num_fds() if hasattr(proc, 'num_fds') else 0
+                    except (psutil.AccessDenied, AttributeError):
+                        num_fds = 0
+
+                    # 网络连接
+                    try:
+                        connections = len(proc.connections())
+                    except (psutil.AccessDenied, psutil.NoSuchProcess):
+                        connections = 0
+
+                    # 计算运行时长
+                    runtime_seconds = time.time() - create_time_timestamp
+                    runtime_hours = runtime_seconds / 3600
+                    if runtime_hours < 1:
+                        runtime = f"{runtime_seconds / 60:.1f} 分钟"
+                    elif runtime_hours < 24:
+                        runtime = f"{runtime_hours:.1f} 小时"
+                    else:
+                        runtime = f"{runtime_hours / 24:.1f} 天"
+
+                    process_stats = {
+                        'pid': pid,
+                        'name': name,
+                        'status': status_str,
+                        'cpu_percent': cpu_percent,
+                        'memory_mb': memory_info.rss / 1024 / 1024,  # 物理内存 MB
+                        'virtual_memory_mb': memory_info.vms / 1024 / 1024,  # 虚拟内存 MB
+                        'memory_percent': memory_percent,
+                        'create_time': create_time_timestamp,  # 返回原始时间戳
+                        'runtime': runtime,
+                        'num_threads': num_threads,
+                        'num_fds': num_fds,
+                        'connections': connections
+                    }
+
+                    return {
+                        "message": "获取进程统计信息成功",
+                        "process_stats": process_stats,
+                        "server_status": status
+                    }
+
+            except ImportError:
+                return {
+                    "message": "psutil模块未安装，无法获取进程统计信息",
+                    "error": True,
+                    "process_stats": None
+                }
+            except psutil.NoSuchProcess:
+                return {
+                    "message": f"进程 {pid} 不存在",
+                    "error": True,
+                    "process_stats": None
+                }
+            except psutil.AccessDenied:
+                return {
+                    "message": f"无权限访问进程 {pid}",
+                    "error": True,
+                    "process_stats": None
+                }
+            except Exception as e:
+                logger.error(f"获取进程统计信息时出错: {str(e)}")
+                return {
+                    "message": f"获取进程统计信息时出错: {str(e)}",
+                    "error": True,
+                    "process_stats": None
+                }
+
+        except Exception as e:
+            logger.error(f"获取进程统计信息API失败: {str(e)}")
+            logger.error(traceback.format_exc())
+            return {
+                "message": f"获取进程统计信息失败: {str(e)}",
+                "error": True,
+                "process_stats": None
             }
 
     def _download_torrent_api(self, body: dict = None) -> Dict[str, Any]:
@@ -1519,29 +1695,38 @@ class MCPServer(_PluginBase):
         """获取插件仪表盘元信息"""
         return [
             {
-                "key": "dashboard1",
+                "key": "mcpserver",
                 "name": "MCP Server"
             }
         ]
 
     def get_dashboard(
-        self, _key: str, **_kwargs
+        self, key: str = "", **kwargs
     ) -> Optional[Tuple[Dict[str, Any], Dict[str, Any], Optional[List[dict]]]]:
         """
         获取插件仪表盘页面
 
         参数:
-            _key: 仪表盘键名，未使用
-            _kwargs: 额外参数，未使用
+            key: 仪表盘键名，未使用
+            kwargs: 额外参数，未使用
         """
+        # 获取Dashboard配置
+        dashboard_refresh_interval = self._config.get("dashboard_refresh_interval", 30)
+        dashboard_auto_refresh = self._config.get("dashboard_auto_refresh", True)
+
         return {
             "cols": 12,
             "md": 6
         }, {
-            "refresh": 10,
+            "refresh": dashboard_refresh_interval,  # 使用配置的刷新间隔
             "border": True,
             "title": "MCP Server",
-            "subtitle": "启动MCP服务器实现大模型操作MoviePilot"
+            "subtitle": "启动MCP服务器实现大模型操作MoviePilot",
+            "render_mode": "vue",  # 使用Vue渲染模式
+            "pluginConfig": {  # 传递插件配置给前端组件
+                "dashboard_refresh_interval": dashboard_refresh_interval,
+                "dashboard_auto_refresh": dashboard_auto_refresh
+            }
         }, None
 
 

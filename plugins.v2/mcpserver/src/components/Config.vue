@@ -116,6 +116,37 @@
               ></v-text-field>
             </v-col>
           </v-row>
+
+          <!-- Dashboard 配置区域 -->
+          <div class="text-subtitle-1 font-weight-bold mt-4 mb-2">Dashboard 配置</div>
+          <v-row>
+            <v-col cols="12" md="6">
+              <v-select
+                v-model="config.dashboard_refresh_interval"
+                label="状态刷新间隔"
+                variant="outlined"
+                :items="refreshIntervalOptions"
+                item-title="label"
+                item-value="value"
+                hint="Dashboard状态信息的自动刷新间隔时间"
+                persistent-hint
+              >
+                <template v-slot:prepend-inner>
+                  <v-icon color="primary">mdi-refresh</v-icon>
+                </template>
+              </v-select>
+            </v-col>
+            <v-col cols="12" md="6">
+              <v-switch
+                v-model="config.dashboard_auto_refresh"
+                label="启用自动刷新"
+                color="primary"
+                inset
+                hint="是否启用Dashboard的自动刷新功能"
+                persistent-hint
+              ></v-switch>
+            </v-col>
+          </v-row>
         </v-form>
       </v-card-text>
       <v-card-actions>
@@ -129,7 +160,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, watch } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 
 // 接收初始配置
 const props = defineProps({
@@ -161,6 +192,18 @@ const portRules = [
   v => (parseInt(v) >= 1 && parseInt(v) <= 65535) || '端口号必须在1-65535之间'
 ]
 
+// 刷新间隔选项
+const refreshIntervalOptions = [
+  { label: '5秒', value: 5 },
+  { label: '10秒', value: 10 },
+  { label: '15秒', value: 15 },
+  { label: '30秒', value: 30 },
+  { label: '1分钟', value: 60 },
+  { label: '2分钟', value: 120 },
+  { label: '5分钟', value: 300 },
+  { label: '10分钟', value: 600 },
+]
+
 // 配置数据，使用默认值和初始配置合并
 const defaultConfig = {
   enable: true,
@@ -168,6 +211,8 @@ const defaultConfig = {
   auth_token: '',
   mp_username: 'admin',
   mp_password: '',
+  dashboard_refresh_interval: 30, // 默认30秒
+  dashboard_auto_refresh: true,   // 默认启用自动刷新
 }
 
 // 记录原始启用状态
@@ -209,17 +254,19 @@ onMounted(() => {
       if ('mp_password' in props.initialConfig.config) {
         config.mp_password = props.initialConfig.config.mp_password
       }
+
+      // 处理 Dashboard 刷新间隔
+      if ('dashboard_refresh_interval' in props.initialConfig.config) {
+        config.dashboard_refresh_interval = props.initialConfig.config.dashboard_refresh_interval
+      }
+
+      // 处理 Dashboard 自动刷新开关
+      if ('dashboard_auto_refresh' in props.initialConfig.config) {
+        config.dashboard_auto_refresh = props.initialConfig.config.dashboard_auto_refresh
+      }
     }
 
     console.log('处理后的配置:', config)
-  }
-})
-
-// 监听启用状态变化，自动保存配置
-watch(() => config.enable, (newValue, oldValue) => {
-  if (newValue !== oldValue && oldValue !== undefined) {
-    console.log(`启用状态从 ${oldValue} 变为 ${newValue}，自动保存配置`)
-    saveConfig()
   }
 })
 
@@ -247,7 +294,9 @@ async function saveConfig() {
         port: config.port,
         auth_token: config.auth_token,
         mp_username: config.mp_username,
-        mp_password: config.mp_password
+        mp_password: config.mp_password,
+        dashboard_refresh_interval: config.dashboard_refresh_interval,
+        dashboard_auto_refresh: config.dashboard_auto_refresh
       }
     }
     console.log('保存配置:', configToSave)
