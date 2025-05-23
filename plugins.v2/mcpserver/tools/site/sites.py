@@ -86,10 +86,19 @@ class GetSitesTool(BaseTool):
                 )
             ]
 
-        # 使用列表推导式简化代码
+        # 只保留指定字段的站点信息
+        filtered_sites = []
+        for site in response:
+            filtered_site = {
+                key: site.get(key)
+                for key in ['id', 'name', 'pri']
+                if key in site
+            }
+            filtered_sites.append(filtered_site)
+
         sites_info = [
             json.dumps(site, ensure_ascii=False, indent=2)
-            for site in response
+            for site in filtered_sites
         ]
 
         return [

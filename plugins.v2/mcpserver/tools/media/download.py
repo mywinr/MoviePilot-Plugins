@@ -3,6 +3,7 @@ import logging
 import mcp.types as types
 from ..base import BaseTool
 from .recognize import MediaRecognizeTool
+from ..resource_cache import resource_cache
 
 
 # Configure logging
@@ -27,6 +28,8 @@ class MovieDownloadTool(BaseTool):
             return await self._download_torrent(arguments)
         elif tool_name == "get-downloaders":
             return await self._get_downloaders(arguments)
+        elif tool_name == "get-resource-cache-stats":
+            return await self._get_resource_cache_stats(arguments)
         else:
             return [
                 types.TextContent(
@@ -114,7 +117,6 @@ class MovieDownloadTool(BaseTool):
 
             seeders = torrent_info.get("seeders", 0)
             peers = torrent_info.get("peers", 0)
-            torrent_url = torrent_info.get("enclosure", "")
 
             # 格式化资源信息
             result_text += f"{i+1}. {title}\n"
@@ -180,8 +182,12 @@ class MovieDownloadTool(BaseTool):
                     result_text += "   H&R: 是\n"
                 result_text += f"   折扣: {discount}\n"
 
-            # 添加资源下载链接
-            result_text += f"   资源下载链接: {torrent_url}\n\n"
+            # 生成资源标识符并缓存真实下载链接
+            resource_id = resource_cache.generate_resource_id(torrent_info)
+            resource_cache.store_resource(resource_id, torrent_info)
+
+            # 添加资源标识符（隐藏真实下载链接）
+            result_text += f"   资源标识符: {resource_id}\n\n"
 
         return result_text
 
@@ -328,18 +334,38 @@ class MovieDownloadTool(BaseTool):
         """
         下载指定的种子资源
         参数:
-            - torrent_url: 种子资源下载链接
+            - torrent_url: 种子资源下载链接（与resource_id二选一）
+            - resource_id: 资源标识符（与torrent_url二选一）
             - downloader: 下载器名称(可选)
             - save_path: 保存路径(可选)
         """
         torrent_url = arguments.get("torrent_url")
-        if not torrent_url:
+        resource_id = arguments.get("resource_id")
+
+        # 检查参数：必须提供torrent_url或resource_id之一
+        if not torrent_url and not resource_id:
             return [
                 types.TextContent(
                     type="text",
-                    text="错误：请提供要下载的资源链接"
+                    text="错误：请提供要下载的资源链接(torrent_url)或资源标识符(resource_id)"
                 )
             ]
+
+        # 如果提供了resource_id，从缓存中获取真实下载链接
+        if resource_id and not torrent_url:
+            torrent_url = resource_cache.get_torrent_url(resource_id)
+            if not torrent_url:
+                return [
+                    types.TextContent(
+                        type="text",
+                        text=f"错误：无法找到资源标识符对应的下载链接: {resource_id}。可能资源已过期或不存在。"
+                    )
+                ]
+            logger.info(f"通过资源标识符 {resource_id} 获取到下载链接")
+
+        # 如果同时提供了两个参数，优先使用torrent_url
+        if torrent_url and resource_id:
+            logger.info("同时提供了torrent_url和resource_id，优先使用torrent_url")
 
         # 获取其他可选参数
         downloader = arguments.get("downloader")
@@ -577,13 +603,47 @@ class MovieDownloadTool(BaseTool):
                 )
             ]
 
+    async def _get_resource_cache_stats(
+        self, _: dict = None
+    ) -> list[types.TextContent]:
+        """
+        获取资源缓存统计信息
+        参数:
+            - _: 工具参数（当前未使用）
+        """
+        try:
+            stats = resource_cache.get_cache_stats()
+
+            result_text = "资源缓存统计信息：\n\n"
+            result_text += f"总缓存条目数: {stats.get('total_count', 0)}\n"
+            result_text += f"活跃条目数: {stats.get('active_count', 0)}\n"
+            result_text += f"过期条目数: {stats.get('expired_count', 0)}\n"
+            result_text += f"最大缓存大小: {stats.get('max_size', 0)}\n"
+            result_text += f"缓存过期时间: {stats.get('ttl_seconds', 0)} 秒\n"
+
+            return [
+                types.TextContent(
+                    type="text",
+                    text=result_text
+                )
+            ]
+
+        except Exception as e:
+            logger.error(f"获取缓存统计信息时出错: {str(e)}")
+            return [
+                types.TextContent(
+                    type="text",
+                    text=f"获取缓存统计信息时出错: {str(e)}"
+                )
+            ]
+
     @property
     def tool_info(self) -> list[types.Tool]:
         """返回工具的描述信息"""
         return [
             types.Tool(
                 name="search-media-resources",
-                description="搜索媒体资源，支持按名称、年份、清晰度等条件搜索，返回站点可下载的资源链接。可以通过keyword参数或mediaid参数指定要搜索的媒体，推荐先使用search-media工具获取准确的mediaid。",
+                description="搜索媒体资源，支持按名称、年份、清晰度等条件搜索，返回资源标识符（隐藏真实下载链接以保护隐私）。可以通过keyword参数或mediaid参数指定要搜索的媒体，推荐先使用search-media工具获取准确的mediaid。返回的资源标识符可用于download-torrent工具进行下载。",
                 inputSchema={
                     "type": "object",
                     "required": ["sites"],
@@ -621,7 +681,7 @@ class MovieDownloadTool(BaseTool):
             ),
             types.Tool(
                 name="fuzzy-search-media-resources",
-                description="模糊搜索媒体资源，当精确搜索无法识别媒体信息时使用此工具，返回站点可下载的资源链接",
+                description="模糊搜索媒体资源，当精确搜索无法识别媒体信息时使用此工具，返回资源标识符（隐藏真实下载链接以保护隐私）。返回的资源标识符可用于download-torrent工具进行下载。",
                 inputSchema={
                     "type": "object",
                     "required": ["keyword", "sites"],
@@ -659,14 +719,18 @@ class MovieDownloadTool(BaseTool):
             ),
             types.Tool(
                 name="download-torrent",
-                description="通过资源下载链接下载资源",
+                description="通过资源下载链接或资源标识符下载资源。支持两种方式：1)直接提供torrent_url；2)提供从search-media-resources获取的resource_id",
                 inputSchema={
                     "type": "object",
-                    "required": ["torrent_url", "media_type"],
+                    "required": ["media_type"],
                     "properties": {
                         "torrent_url": {
                             "type": "string",
-                            "description": "资源下载链接"
+                            "description": "资源下载链接（与resource_id二选一）"
+                        },
+                        "resource_id": {
+                            "type": "string",
+                            "description": "资源标识符，从search-media-resources工具获取（与torrent_url二选一）"
                         },
                         "downloader": {
                             "type": "string",
@@ -681,6 +745,14 @@ class MovieDownloadTool(BaseTool):
                             "description": "电影 or 电视剧"
                         }
                     },
+                },
+            ),
+            types.Tool(
+                name="get-resource-cache-stats",
+                description="获取资源缓存统计信息，用于查看当前缓存状态",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
                 },
             )
         ]
