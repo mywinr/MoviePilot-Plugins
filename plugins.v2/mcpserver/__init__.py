@@ -55,6 +55,7 @@ class MCPServer(_PluginBase):
     _monitor_thread = None
     _monitor_stop_event = None
     _config = {
+        "server_type": "streamable", # 服务器类型: streamable 或 sse
         "host": "0.0.0.0",  # 监听所有网络接口
         "port": 3111,
         "log_level": "INFO",
@@ -90,12 +91,19 @@ class MCPServer(_PluginBase):
         # 设置Python解释器路径 (仅Linux)
         self._python_bin = self._venv_path / "bin" / "python"
 
-        # 设置服务器脚本路径
-        self._server_script_path = self._plugin_dir / "server.py"
+        # 根据服务器类型设置服务器脚本路径
+        server_type = self._config.get("server_type", "streamable")
+        if server_type == "sse":
+            self._server_script_path = self._plugin_dir / "sse_server.py"
+        else:
+            self._server_script_path = self._plugin_dir / "server.py"
 
         # 设置健康检查URL
         port = int(self._config["port"])
-        self._health_check_url = f"http://localhost:{port}/mcp/"
+        if server_type == "sse":
+            self._health_check_url = f"http://localhost:{port}/health"
+        else:
+            self._health_check_url = f"http://localhost:{port}/mcp/"
 
         if not self._enable:
             # 如果插件被禁用，停止服务器
@@ -217,7 +225,8 @@ class MCPServer(_PluginBase):
             return
 
         try:
-            logger.info("正在启动MCP服务器作为独立进程...")
+            server_type = self._config.get("server_type", "streamable")
+            logger.info(f"正在启动MCP服务器作为独立进程 (类型: {server_type})...")
 
             # 先检查端口是否被占用
             self._check_and_clear_port()

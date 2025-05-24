@@ -15,8 +15,7 @@ from starlette.applications import Starlette
 from starlette.routing import Mount
 from starlette.types import Receive, Scope, Send
 from starlette.middleware import Middleware
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse
+
 
 # 设置详细的异常处理
 sys.excepthook = lambda exctype, value, tb: print(f"全局异常: {exctype.__name__}: {value}\n{''.join(traceback.format_tb(tb))}")
@@ -54,65 +53,8 @@ logger = logging.getLogger(__name__)
 from tools import ToolManager
 from prompts import PromptManager
 
-# Token管理器
-class TokenManager:
-    def __init__(self, initial_token: str = None, access_token: str = None):
-        self.token = initial_token
-        self.access_token = access_token
-
-        if not self.token:
-            logger.warning("服务器启动时没有设置Token，API安全性无法保证")
-        else:
-            logger.info("Token管理器已初始化")
-
-        if self.access_token:
-            logger.info("MoviePilot access_token 已设置")
-        else:
-            logger.warning("未设置 MoviePilot access_token，访问 MoviePilot API 可能受限")
-
-    def get_token(self) -> str:
-        """获取当前token"""
-        return self.token
-
-    def get_access_token(self) -> str:
-        """获取 MoviePilot access_token"""
-        return self.access_token
-
-
-# 认证中间件
-class BearerAuthMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, token_manager: TokenManager):
-        super().__init__(app)
-        self.token_manager = token_manager
-
-    async def dispatch(self, request, call_next):
-        # 获取当前token
-        current_token = self.token_manager.get_token()
-
-        # 无token时拒绝所有请求（确保安全性）
-        if not current_token:
-            return JSONResponse(
-                {"message": "服务器未设置认证Token，拒绝访问", "error": "unauthorized"},
-                status_code=401
-            )
-
-        # 验证Authorization头
-        auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer "):
-            return JSONResponse(
-                {"message": "认证失败，请提供Bearer Token", "error": "unauthorized"},
-                status_code=401
-            )
-
-        token = auth_header.replace("Bearer ", "")
-        if token != current_token:
-            return JSONResponse(
-                {"message": "认证失败，提供的Token无效", "error": "unauthorized"},
-                status_code=401
-            )
-
-        # 认证通过
-        return await call_next(request)
+# 导入共享的认证模块
+from auth import BearerAuthMiddleware, create_token_manager
 
 @click.command()
 @click.option("--host", default="127.0.0.1", help="Host address to listen on")
@@ -198,12 +140,7 @@ def main(
     set_moviepilot_port(moviepilot_port)
 
     # 创建Token管理器
-    token_manager = TokenManager(auth_token, access_token)
-
-    if auth_token:
-        logger.info("API认证已启用，需要Bearer Token才能访问")
-    else:
-        logger.warning("未设置认证Token，API安全性无法保证！请尽快设置Token")
+    token_manager = create_token_manager(auth_token, access_token)
 
     # 创建Server实例
     app = Server("moviepilot-mcp-server")

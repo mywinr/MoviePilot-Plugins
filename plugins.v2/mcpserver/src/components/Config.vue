@@ -32,6 +32,18 @@
           <div class="text-subtitle-1 font-weight-bold mt-4 mb-2">MCP Server配置</div>
           <v-row>
             <v-col cols="12" md="6">
+              <v-select
+                v-model="config.server_type"
+                label="服务器类型"
+                variant="outlined"
+                :items="serverTypeOptions"
+                item-title="text"
+                item-value="value"
+                hint="选择MCP服务器传输协议类型"
+                persistent-hint
+              ></v-select>
+            </v-col>
+            <v-col cols="12" md="6">
               <v-text-field
                 v-model="config.port"
                 label="端口号"
@@ -40,6 +52,8 @@
                 :rules="portRules"
               ></v-text-field>
             </v-col>
+          </v-row>
+          <v-row>
             <v-col cols="12" md="6">
               <v-text-field
                 v-model="config.auth_token"
@@ -204,9 +218,16 @@ const refreshIntervalOptions = [
   { label: '10分钟', value: 600 },
 ]
 
+// 服务器类型选项
+const serverTypeOptions = [
+  { text: 'HTTP Streamable (默认)', value: 'streamable' },
+  { text: 'Server-Sent Events (SSE)', value: 'sse' }
+]
+
 // 配置数据，使用默认值和初始配置合并
 const defaultConfig = {
   enable: true,
+  server_type: 'streamable',      // 默认使用streamable
   port: '3111',
   auth_token: '',
   mp_username: 'admin',
@@ -291,6 +312,7 @@ async function saveConfig() {
     const configToSave = {
       enable: config.enable,
       config: {
+        server_type: config.server_type,
         port: config.port,
         auth_token: config.auth_token,
         mp_username: config.mp_username,
