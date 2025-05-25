@@ -9,17 +9,15 @@ import socket
 import secrets
 import string
 import json
+from enum import Enum
 from typing import List, Tuple, Dict, Any, Optional
 from pathlib import Path
 
 from app.log import logger
 from app.plugins import _PluginBase
 from app.core.config import settings
-from app.db.site_oper import SiteOper
-from app.utils.string import StringUtils
 from app.helper.downloader import DownloaderHelper
 from app.helper.directory import DirectoryHelper
-from app.schemas import ServiceInfo
 
 
 def generate_token(length=32):
@@ -28,139 +26,666 @@ def generate_token(length=32):
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 
+class ServerState(Enum):
+    """服务器状态枚举"""
+    STOPPED = "stopped"
+    STARTING = "starting"
+    RUNNING = "running"
+    STOPPING = "stopping"
+    ERROR = "error"
+
+
+class ProcessManager:
+    """进程管理器 - 统一管理MCP服务器进程的生命周期"""
+
+    # 细粒度锁设计，避免死锁
+    _instance_lock = threading.Lock()  # 仅用于单例创建
+    _monitor_lock = threading.Lock()   # 仅用于监控线程管理
+    _global_instance = None
+    _global_monitor_active = False
+
+    def __new__(cls, plugin_instance):
+        """确保只有一个ProcessManager实例"""
+        with cls._instance_lock:
+            if cls._global_instance is None:
+                logger.info("创建全局唯一的ProcessManager实例")
+                cls._global_instance = super().__new__(cls)
+                cls._global_instance._initialized = False
+            else:
+                logger.info("返回现有的ProcessManager实例")
+            return cls._global_instance
+
+    def __init__(self, plugin_instance):
+        if hasattr(self, '_initialized') and self._initialized:
+            self.plugin = plugin_instance
+            return
+
+        self.plugin = plugin_instance
+        self.state = ServerState.STOPPED
+        self.process = None
+        self.monitor_thread = None
+        self.monitor_stop_event = None
+        self._state_lock = threading.Lock()
+        self._operation_lock = threading.Lock()
+        self._restart_lock = threading.Lock()
+        self._initialized = True
+        logger.info("ProcessManager实例初始化完成")
+
+    def get_state(self) -> ServerState:
+        with self._state_lock:
+            return self.state
+
+    def _set_state(self, new_state: ServerState):
+        with self._state_lock:
+            old_state = self.state
+            self.state = new_state
+            if old_state != new_state:
+                logger.info(f"进程状态变更: {old_state.value} -> {new_state.value}")
+
+    def is_running(self) -> bool:
+        """检查进程是否正在运行，使用PID检测和健康检查双重验证"""
+        return self._robust_process_check()
+
+    def _robust_process_check(self) -> bool:
+        """健壮的进程状态检测 - 基于PID存在性和健康检查"""
+        if self.process is None:
+            return False
+
+        try:
+            pid_exists = False
+            try:
+                import psutil
+                if hasattr(self.process, 'pid') and self.process.pid:
+                    proc = psutil.Process(self.process.pid)
+                    pid_exists = proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE
+            except (ImportError, psutil.NoSuchProcess, psutil.AccessDenied):
+                pid_exists = False
+
+            health_ok = False
+            if pid_exists:
+                health_ok = self._health_check()
+
+            if pid_exists and health_ok:
+                logger.debug("进程检查: PID存在且健康检查通过 -> running")
+                if self.get_state() != ServerState.RUNNING:
+                    self._set_state(ServerState.RUNNING)
+                return True
+            elif pid_exists and not health_ok:
+                logger.debug("进程检查: PID存在但健康检查失败 -> error")
+                if self.get_state() != ServerState.ERROR:
+                    self._set_state(ServerState.ERROR)
+                return False
+            else:
+                logger.debug("进程检查: PID不存在 -> stop")
+                if self.get_state() != ServerState.STOPPED:
+                    self._set_state(ServerState.STOPPED)
+                return False
+
+        except Exception as e:
+            logger.error(f"进程状态检查时发生异常: {str(e)}")
+            return False
+
+    def start_server(self) -> bool:
+        """启动服务器"""
+        with self._operation_lock:
+            if self.get_state() in [ServerState.STARTING, ServerState.RUNNING]:
+                logger.info("服务器已在启动中或运行中，跳过启动")
+                return True
+
+            self._set_state(ServerState.STARTING)
+
+            try:
+                if not self._check_prerequisites():
+                    self._set_state(ServerState.ERROR)
+                    return False
+
+                self._cleanup_existing_process()
+
+                if self._start_process():
+                    self._set_state(ServerState.RUNNING)
+                    self._start_monitor()
+                    logger.info("服务器启动成功")
+                    return True
+                else:
+                    self._set_state(ServerState.ERROR)
+                    return False
+
+            except Exception as e:
+                logger.error(f"启动服务器失败: {str(e)}")
+                logger.error(traceback.format_exc())
+                self._set_state(ServerState.ERROR)
+                return False
+
+    def stop_server(self) -> bool:
+        """停止服务器"""
+        if self.get_state() == ServerState.STOPPED:
+            logger.info("服务器已停止")
+            return True
+
+        self._set_state(ServerState.STOPPING)
+
+        try:
+            self._stop_monitor()
+            self._stop_process()
+            self._set_state(ServerState.STOPPED)
+            return True
+
+        except Exception as e:
+            logger.error(f"停止服务器失败: {str(e)}")
+            logger.error(traceback.format_exc())
+            self._set_state(ServerState.ERROR)
+            return False
+
+    def restart_server(self) -> bool:
+        """重启服务器，使用专用锁防止并发重启"""
+        with self._restart_lock:
+            logger.info("正在重启服务器...")
+
+            if self.stop_server():
+                time.sleep(2)
+                return self.start_server()
+            return False
+
+    def _check_prerequisites(self) -> bool:
+        """检查启动前置条件：虚拟环境、用户凭据、access token"""
+        try:
+            if not self.plugin._ensure_venv():
+                logger.error("无法创建或验证虚拟环境")
+                return False
+
+            username = self.plugin._config.get("mp_username", "")
+            password = self.plugin._config.get("mp_password", "")
+
+            if not username or not password:
+                logger.error("未配置 MoviePilot 用户名或密码")
+                return False
+
+            access_token = self.plugin._get_moviepilot_access_token()
+            if not access_token:
+                logger.error("无法获取 MoviePilot 的 access token")
+                return False
+
+            self.plugin._config["access_token"] = access_token
+            logger.info("已获取 MoviePilot 的 access token")
+            return True
+
+        except Exception as e:
+            logger.error(f"检查前置条件失败: {str(e)}")
+            return False
+
+    def _cleanup_existing_process(self):
+        """清理现有进程和端口占用"""
+        try:
+            self.plugin._check_and_clear_port()
+
+            if self.process and self.process.poll() is None:
+                logger.info("停止现有进程...")
+                self._stop_process()
+                time.sleep(1)
+
+        except Exception as e:
+            logger.error(f"清理现有进程失败: {str(e)}")
+
+    def _start_process(self) -> bool:
+        """启动新进程并等待健康检查通过"""
+        try:
+            cmd = self._build_start_command()
+            if not cmd:
+                return False
+
+            logger.info(f"启动命令: {' '.join(cmd)}")
+
+            self.process = subprocess.Popen(
+                cmd,
+                cwd=str(self.plugin._plugin_dir)
+            )
+
+            if self.process is None:
+                raise RuntimeError("进程启动失败")
+
+            logger.info(f"服务器进程已启动，PID: {self.process.pid}")
+
+            if self._wait_for_startup():
+                logger.info(
+                    f"MCP服务器已成功启动 - {self.plugin._config['host']}:{self.plugin._config['port']}")
+                return True
+            else:
+                logger.error("服务器启动失败或健康检查未通过")
+                self._stop_process()
+                return False
+
+        except Exception as e:
+            logger.error(f"启动进程失败: {str(e)}")
+            logger.error(traceback.format_exc())
+            if self.process:
+                try:
+                    self.process.terminate()
+                except:
+                    pass
+                self.process = None
+            return False
+
+    def _build_start_command(self) -> Optional[List[str]]:
+        """构建MCP服务器启动命令，包含认证token和配置参数"""
+        try:
+            server_type = self.plugin._config.get("server_type", "streamable")
+            if server_type == "sse":
+                script_path = self.plugin._plugin_dir / "sse_server.py"
+            else:
+                script_path = self.plugin._plugin_dir / "server.py"
+
+            if not script_path.exists():
+                logger.error(f"启动脚本不存在: {script_path}")
+                return None
+
+            try:
+                script_path.chmod(0o755)
+            except Exception as e:
+                logger.warning(f"无法设置脚本执行权限: {e}")
+
+            auth_token = self.plugin._config.get("auth_token", "")
+            if not auth_token:
+                auth_token = generate_token(32)
+                self.plugin._config["auth_token"] = auth_token
+                self.plugin.update_config({
+                    "enable": self.plugin._enable,
+                    "config": self.plugin._config
+                })
+                logger.info("已生成新的API认证token")
+
+            access_token = self.plugin._config.get("access_token", "")
+
+            log_file_path = str(Path(settings.LOG_PATH) /
+                                "plugins" / "mcpserver.log")
+
+            cmd = [
+                str(self.plugin._python_bin),
+                str(script_path),
+                "--host", self.plugin._config["host"],
+                "--port", str(self.plugin._config["port"]),
+                "--log-level", self.plugin._config["log_level"],
+                "--log-file", log_file_path,
+                "--moviepilot-port", str(settings.PORT)
+            ]
+
+            if auth_token:
+                cmd.extend(["--auth-token", auth_token])
+
+            if access_token:
+                cmd.extend(["--access-token", access_token])
+
+            return cmd
+
+        except Exception as e:
+            logger.error(f"构建启动命令失败: {str(e)}")
+            return None
+
+    def _wait_for_startup(self) -> bool:
+        """等待服务器启动并进行健康检查"""
+        start_time = time.time()
+        max_time = self.plugin._config["max_startup_time"]
+        interval = self.plugin._config["health_check_interval"]
+
+        logger.info(f"等待服务器启动，最长等待{max_time}秒")
+
+        while time.time() - start_time < max_time:
+            if self.process is None or self.process.poll() is not None:
+                if self.process:
+                    exitcode = self.process.poll()
+                    logger.error(f"服务器进程已退出，返回码: {exitcode}")
+                return False
+
+            if self._health_check():
+                return True
+
+            time.sleep(interval)
+
+        logger.error(f"等待服务器启动超时 ({max_time}秒)")
+        return False
+
+    def _health_check(self) -> bool:
+        """向服务器发送健康检查请求"""
+        try:
+            response = requests.get(self.plugin._health_check_url, timeout=2)
+            return response.status_code == 200
+
+        except requests.RequestException:
+            return False
+
+    def _stop_process(self):
+        """停止进程，先尝试优雅终止，失败后强制终止"""
+        if self.process is None:
+            return
+
+        try:
+            pid = self.process.pid
+            logger.info(f"正在停止进程 PID: {pid}")
+
+            if self.process.poll() is not None:
+                logger.info("进程已经终止")
+                self.process = None
+                return
+
+            try:
+                self.process.send_signal(signal.SIGTERM)
+                logger.info("已发送SIGTERM信号")
+            except Exception as e:
+                logger.error(f"发送SIGTERM信号失败: {str(e)}")
+                try:
+                    self.process.kill()
+                    logger.info("已直接强制终止进程")
+                except Exception as kill_error:
+                    logger.error(f"强制终止进程失败: {str(kill_error)}")
+                self.process = None
+                return
+
+            for i in range(5):
+                if self.process.poll() is not None:
+                    logger.info(f"进程已优雅退出，返回码: {self.process.poll()}")
+                    break
+                logger.info(f"等待进程退出... ({i+1}/5)")
+                time.sleep(1)
+            else:
+                try:
+                    if self.process.poll() is None:
+                        logger.info("优雅终止失败，强制终止进程")
+                        self.process.kill()
+                        time.sleep(2)
+                except Exception as e:
+                    logger.error(f"强制终止进程失败: {str(e)}")
+
+            self.process = None
+            logger.info("进程已停止")
+
+        except Exception as e:
+            logger.error(f"停止进程失败: {str(e)}")
+            self.process = None
+
+    def _start_monitor(self):
+        """启动全局唯一的监控线程，负责自动重启意外终止的服务器"""
+        if not self.plugin._config.get("auto_restart", True):
+            logger.info("自动重启已禁用，不启动监控线程")
+            return
+
+        self._stop_monitor()
+
+        with ProcessManager._monitor_lock:
+            if ProcessManager._global_monitor_active:
+                logger.debug("全局监控线程已在运行，跳过启动")
+                return
+
+            self.monitor_stop_event = threading.Event()
+            self.monitor_thread = threading.Thread(
+                target=self._monitor_loop,
+                daemon=True
+            )
+            self.monitor_thread.start()
+            ProcessManager._global_monitor_active = True
+            logger.info("进程监控线程已启动")
+
+    def _stop_monitor(self):
+        """停止监控线程并重置全局状态"""
+        if self.monitor_stop_event:
+            self.monitor_stop_event.set()
+
+        if self.monitor_thread and self.monitor_thread.is_alive():
+            logger.debug("正在停止监控线程...")
+            self.monitor_thread.join(timeout=3)
+            if self.monitor_thread.is_alive():
+                logger.warning("监控线程未能在3秒内停止")
+
+        lock_acquired = ProcessManager._monitor_lock.acquire(blocking=False)
+        if lock_acquired:
+            try:
+                ProcessManager._global_monitor_active = False
+            finally:
+                ProcessManager._monitor_lock.release()
+        else:
+            logger.warning("无法获取监控锁，跳过重置全局监控状态")
+
+        self.monitor_thread = None
+        self.monitor_stop_event = None
+
+    def _monitor_loop(self):
+        """监控循环，检测进程状态并自动重启意外终止的服务器"""
+        try:
+            logger.info("进程监控线程开始运行")
+
+            while not self.monitor_stop_event.is_set():
+                if not self.plugin._enable:
+                    logger.info("插件已禁用，监控线程退出")
+                    break
+
+                restart_needed = False
+                delay = 5
+                current_state = None
+
+                with self._operation_lock:
+                    current_state = self.get_state()
+                    if current_state == ServerState.STARTING:
+                        if self.monitor_stop_event.wait(2):
+                            break
+                        continue
+
+                    process_running = self._robust_process_check()
+
+                    if not process_running:
+                        if self.monitor_stop_event.is_set():
+                            break
+
+                        exitcode = self.process.poll() if self.process else "unknown"
+                        logger.warning(f"服务器进程意外终止，返回码: {exitcode}")
+
+                        if exitcode == 1:
+                            logger.error("服务器启动失败（返回码1），可能是配置或依赖问题，暂停监控60秒")
+                            self._set_state(ServerState.ERROR)
+                            break
+
+                        self._set_state(ServerState.STARTING)
+                        restart_needed = True
+                        delay = self.plugin._config.get("restart_delay", 5)
+                        logger.info(f"将在{delay}秒后重启服务器")
+
+                # 在锁外处理等待和重启，避免长时间持锁
+                if current_state == ServerState.ERROR:
+                    # 错误状态下等待60秒
+                    if self.monitor_stop_event.wait(60):
+                        logger.info("监控线程在暂停期间收到停止信号，退出")
+                        break
+                    continue
+
+                # 在锁外等待和重启，避免长时间持有锁
+                if restart_needed:
+                    if self.monitor_stop_event.wait(delay):
+                        logger.info("监控线程在等待期间收到停止信号，取消重启")
+                        self._set_state(ServerState.STOPPED)
+                        break
+
+                    # 再次检查插件状态和停止信号
+                    if not self.plugin._enable or self.monitor_stop_event.is_set():
+                        logger.info("插件已禁用或收到停止信号，取消重启")
+                        self._set_state(ServerState.STOPPED)
+                        break
+
+                    # 重启服务器 - 使用操作锁而非全局锁
+                    with self._operation_lock:
+                        # 再次检查状态，确保仍需要重启
+                        if self.get_state() == ServerState.STARTING:
+                            logger.info("正在重启MCP服务器...")
+                            if self._start_process():
+                                self._set_state(ServerState.RUNNING)
+                                logger.info("服务器重启成功")
+                            else:
+                                self._set_state(ServerState.ERROR)
+                                logger.error("服务器重启失败，暂停监控60秒")
+                                if self.monitor_stop_event.wait(60):
+                                    logger.info("监控线程在暂停期间收到停止信号，退出")
+                                    break
+
+                # 正常情况下每5秒检查一次
+                if self.monitor_stop_event.wait(5):
+                    break
+
+        except Exception as e:
+            logger.error(f"监控线程发生异常: {str(e)}")
+            logger.error(traceback.format_exc())
+        finally:
+            # 重置全局监控状态 - 使用监控锁而非全局锁
+            with ProcessManager._monitor_lock:
+                ProcessManager._global_monitor_active = False
+            logger.info("进程监控线程已结束")
+
+
 class MCPServer(_PluginBase):
-    # 插件名称
     plugin_name = "MCP Server"
-    # 插件描述
     plugin_desc = "使用MCP客户端通过大模型来操作MoviePilot"
-    # 插件图标
     plugin_icon = (
         "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/mcp.png"
     )
-    # 插件版本
-    plugin_version = "1.5"
-    # 插件作者
+    plugin_version = "1.6"
     plugin_author = "DzAvril"
-    # 作者主页
     author_url = "https://github.com/DzAvril"
-    # 插件配置项ID前缀
     plugin_config_prefix = "mcpserver_"
-    # 加载顺序
     plugin_order = 0
-    # 可使用的用户级别
     auth_level = 1
 
     _enable = False
-    _server_process = None
-    _monitor_thread = None
-    _monitor_stop_event = None
     _config = {
-        "server_type": "streamable", # 服务器类型: streamable 或 sse
-        "host": "0.0.0.0",  # 监听所有网络接口
+        "server_type": "streamable",
+        "host": "0.0.0.0",
         "port": 3111,
         "log_level": "INFO",
-        "health_check_interval": 3,  # 健康检查间隔(秒)
-        "max_startup_time": 60,      # 最大启动等待时间(秒)
-        "venv_dir": "venv",          # 虚拟环境目录名
-        "dependencies": ["mcp[cli]"],  # 需要安装的依赖
-        "auto_restart": True,        # 是否自动重启意外终止的服务器
-        "restart_delay": 5,          # 重启前等待时间(秒)
-        "auth_token": "",            # API认证令牌
+        "health_check_interval": 3,
+        "max_startup_time": 60,
+        "venv_dir": "venv",
+        "dependencies": ["mcp[cli]"],
+        "auto_restart": True,
+        "restart_delay": 5,
+        "auth_token": "",
     }
 
-    # 虚拟环境相关路径
     _venv_path = None
     _python_bin = None
     _health_check_url = None
     _server_script_path = None
     _downloader_helper = DownloaderHelper()
+    _process_manager = None
+
+    def __init__(self):
+        """初始化MCPServer类，创建ProcessManager实例和设置基本路径"""
+        super().__init__()
+
+        self._plugin_dir = Path(__file__).parent.absolute()
+        self._venv_path = self._plugin_dir / self._config["venv_dir"]
+        self._python_bin = self._venv_path / "bin" / "python"
+
+        self._process_manager = ProcessManager(self)
+        logger.info("MCPServer插件已初始化")
 
     def init_plugin(self, config: dict = None):
-        """初始化插件"""
+        """初始化插件，检测配置变化并处理服务器状态"""
         if not config:
             return
+
+        previous_enable = self._enable
+        previous_server_type = self._config.get("server_type", "streamable")
+
         self._enable = config.get('enable', False)
         self._config.update(config.get('config', {}))
 
-        # 设置当前模块所在目录
+        current_enable = self._enable
+        current_server_type = self._config.get("server_type", "streamable")
+
+        enable_changed = previous_enable != current_enable
+        server_type_changed = previous_server_type != current_server_type
+
+        if enable_changed or server_type_changed:
+            logger.info(f"配置变化: enable={previous_enable}->{current_enable}, "
+                        f"server_type={previous_server_type}->{current_server_type}")
+
         self._plugin_dir = Path(__file__).parent.absolute()
-
-        # 设置虚拟环境路径
         self._venv_path = self._plugin_dir / self._config["venv_dir"]
-
-        # 设置Python解释器路径 (仅Linux)
         self._python_bin = self._venv_path / "bin" / "python"
 
-        # 根据服务器类型设置服务器脚本路径
-        server_type = self._config.get("server_type", "streamable")
-        if server_type == "sse":
+        if current_server_type == "sse":
             self._server_script_path = self._plugin_dir / "sse_server.py"
         else:
             self._server_script_path = self._plugin_dir / "server.py"
 
-        # 设置健康检查URL
         port = int(self._config["port"])
-        if server_type == "sse":
-            self._health_check_url = f"http://localhost:{port}/health"
-        else:
-            self._health_check_url = f"http://localhost:{port}/mcp/"
+        self._health_check_url = f"http://localhost:{port}/health"
 
-        if not self._enable:
-            # 如果插件被禁用，停止服务器
-            self._stop_server()
-            logger.info("插件已禁用，服务器已停止")
+        if self._process_manager is None:
+            logger.warning("ProcessManager不存在，重新创建")
+            self._process_manager = ProcessManager(self)
+
+        self._handle_server_operations(enable_changed, server_type_changed,
+                                       current_enable)
+
+    def _should_skip_server_operations(self, enable_changed: bool,
+                                       server_type_changed: bool) -> bool:
+        """检查是否应该跳过服务器操作，避免与_save_config重复"""
+        # 使用时间戳来检测是否是短时间内的重复调用
+        import time
+        current_time = time.time()
+
+        # 如果没有配置变化，不需要跳过
+        if not enable_changed and not server_type_changed:
+            return False
+
+        # 检查是否在短时间内（5秒）有相同的配置变化
+        if hasattr(self, '_last_config_change_time'):
+            time_diff = current_time - self._last_config_change_time
+            if time_diff < 5:  # 5秒内的重复调用
+                logger.info(f"检测到{time_diff:.1f}秒内的重复配置变化，跳过服务器操作")
+                return True
+
+        # 记录本次配置变化时间
+        self._last_config_change_time = current_time
+        return False
+
+    def _handle_server_operations(self, enable_changed: bool,
+                                  server_type_changed: bool, current_enable: bool):
+        """根据配置变化处理服务器启动、停止、重启操作"""
+
+        if server_type_changed:
+            logger.info("检测到服务器类型变化，需要重启服务器")
+            if current_enable:
+                self._process_manager.restart_server()
+            else:
+                self._process_manager.stop_server()
             return
 
-        # 确保虚拟环境存在
-        if not self._ensure_venv():
-            logger.error("无法创建或验证虚拟环境，插件无法启动")
+        if enable_changed:
+            if current_enable:
+                logger.info("插件从禁用变为启用，启动服务器...")
+                self._process_manager.start_server()
+            else:
+                logger.info("插件从启用变为禁用，停止服务器...")
+                self._process_manager.stop_server()
             return
 
-        # 检查用户名和密码是否已配置
-        username = self._config.get("mp_username", "")
-        password = self._config.get("mp_password", "")
-
-        if not username or not password:
-            logger.error("未配置 MoviePilot 用户名或密码，无法启动服务器")
-            logger.info("插件已启用，但服务器未启动，请在配置页面填写用户名和密码")
+        if not current_enable and self._process_manager.is_running():
+            logger.info("插件已禁用但服务器仍在运行，正在停止服务器...")
+            self._process_manager.stop_server()
             return
 
-        # 尝试获取 access_token
-        access_token = self._get_moviepilot_access_token()
-        if not access_token:
-            logger.error("无法获取 MoviePilot 的 access token，无法启动服务器")
-            logger.info("插件已启用，但服务器未启动，请检查用户名和密码是否正确")
-            return
-
-        # 保存 access_token 到配置
-        self._config["access_token"] = access_token
-        logger.info("已获取 MoviePilot 的 access token，将用于 API 请求")
-
-        # 检查服务器是否已在运行
-        server_status = self._get_server_status()
-        if not server_status["running"] and self._enable:
-            # 如果插件已启用且服务器未运行，则自动启动服务器
-            logger.info("插件已启用，服务器未运行，正在自动启动服务器...")
-            try:
-                self._start_server()
-                logger.info("服务器已自动启动")
-            except Exception as e:
-                logger.error(f"自动启动服务器失败: {str(e)}")
-                logger.error(traceback.format_exc())
+        if current_enable and not self._process_manager.is_running():
+            logger.info("插件已启用但服务器未运行，正在自动启动服务器...")
+            self._process_manager.start_server()
 
     def _ensure_venv(self) -> bool:
         """确保虚拟环境存在并安装了所需依赖"""
         try:
-            # 检查虚拟环境是否存在
             if not self._python_bin.exists():
-                logger.info(f"正在创建虚拟环境: {self._venv_path}")
-
-                # 创建虚拟环境
+                logger.info(f"创建虚拟环境: {self._venv_path}")
                 venv.create(self._venv_path, with_pip=True)
 
                 if not self._python_bin.exists():
                     logger.error(f"创建虚拟环境失败，找不到Python解释器: {self._python_bin}")
                     return False
+
+                logger.info("虚拟环境创建成功")
 
                 # 安装依赖
                 self._install_dependencies()
@@ -217,151 +742,29 @@ class MCPServer(_PluginBase):
             logger.error(traceback.format_exc())
             return False
 
-    def _start_server(self):
-        """启动MCP服务器作为独立进程"""
-        if (self._server_process is not None and
-                self._server_process.poll() is None):
-            logger.info("服务器已在运行中")
-            return
-
-        try:
-            server_type = self._config.get("server_type", "streamable")
-            logger.info(f"正在启动MCP服务器作为独立进程 (类型: {server_type})...")
-
-            # 先检查端口是否被占用
-            self._check_and_clear_port()
-
-            # 获取启动器脚本路径
-            launcher_script = self._server_script_path
-            if not launcher_script.exists():
-                raise FileNotFoundError(f"启动器脚本不存在: {launcher_script}")
-
-            # 确保脚本有执行权限
-            try:
-                launcher_script.chmod(0o755)
-            except Exception as e:
-                logger.warning(f"无法设置脚本执行权限: {e}")
-
-            # 准备初始token
-            auth_token = self._config.get("auth_token", "")
-            if not auth_token:
-                # 如果没有token则生成新token
-                auth_token = generate_token(32)
-                self._config["auth_token"] = auth_token
-                # 保存新生成的token到配置
-                self.update_config({
-                    "enable": self._enable,
-                    "config": self._config
-                })
-                logger.info("已生成新的API认证token")
-
-            logger.info("API认证已启用，需要Bearer Token才能访问")
-
-            # 获取已保存的 access_token
-            access_token = self._config.get("access_token", "")
-
-            # 获取日志文件路径
-            log_file_path = str(Path(settings.LOG_PATH) / "plugins" / "mcpserver.log")
-            logger.info(f"设置MCP服务器日志输出到: {log_file_path}")
-
-            # 构建启动命令
-            cmd = [
-                str(self._python_bin),
-                str(launcher_script),
-                "--host", self._config["host"],
-                "--port", str(self._config["port"]),
-                "--log-level", self._config["log_level"],
-                "--log-file", log_file_path,
-                "--moviepilot-port", str(settings.PORT)
-            ]
-
-            # 添加认证参数
-            if auth_token:
-                cmd.extend(["--auth-token", auth_token])
-
-            if access_token:
-                cmd.extend(["--access-token", access_token])
-
-            logger.info(f"启动命令: {' '.join(cmd)}")
-
-            # 停止现有的线程
-            self._stop_all_threads()
-
-            # 创建新的停止事件
-            self._monitor_stop_event = threading.Event()
-
-            # 启动前确保进程引用为空
-            self._server_process = None
-
-            try:
-                # 启动进程
-                self._server_process = subprocess.Popen(
-                    cmd,
-                    cwd=str(self._plugin_dir)
-                )
-
-                if self._server_process is None:
-                    raise RuntimeError("进程启动失败，Popen返回None")
-
-                logger.info(f"服务器进程已启动，PID: {self._server_process.pid}")
-
-                # 检查服务器是否成功启动
-                startup_success = False
-                try:
-                    startup_success = self._wait_for_server_startup()
-                except Exception as e:
-                    logger.error(f"等待服务器启动时出错: {str(e)}")
-                    logger.error(traceback.format_exc())
-                    startup_success = False
-
-                if startup_success:
-                    logger.info(
-                        f"MCP服务器已启动 - {self._config['host']}:{self._config['port']}"
-                    )
-
-                    # 启动进程监控线程
-                    if self._config["auto_restart"]:
-                        self._start_monitor_thread()
-                else:
-                    # 终止进程
-                    logger.error("服务器启动失败，尝试停止进程")
-                    self._stop_server()
-                    error_msg = "服务器启动超时或健康检查失败，请检查日志"
-                    logger.error(error_msg)
-                    raise Exception(error_msg)
-            except Exception as e:
-                logger.error(f"启动服务器进程时出错: {str(e)}")
-                logger.error(traceback.format_exc())
-
-                # 确保进程被终止
-                if self._server_process is not None:
-                    try:
-                        self._stop_server()
-                    except Exception as stop_error:
-                        logger.error(f"停止失败的服务器进程时出错: {str(stop_error)}")
-
-                # 清除进程引用
-                self._server_process = None
-                raise
-
-        except Exception as e:
-            logger.error(f"启动MCP服务器失败: {str(e)}")
-            logger.error(traceback.format_exc())
-            self._server_process = None
-
     def _stop_all_threads(self):
         """停止所有线程"""
-        self._stop_monitor_thread()
+        logger.info("正在停止所有监控线程...")
 
-    def _start_monitor_thread(self):
-        """启动进程监控线程"""
-        self._monitor_thread = threading.Thread(
-            target=self._monitor_process_thread,
-            args=(self._monitor_stop_event,),
-            daemon=True
-        )
-        self._monitor_thread.start()
-        logger.info("进程监控线程已启动，将自动重启意外终止的服务器")
+        # 停止ProcessManager的监控线程
+        if self._process_manager:
+            self._process_manager._stop_monitor()
+
+        # 强制清理所有线程引用
+        if hasattr(self, '_monitor_thread') and self._monitor_thread:
+            if self._monitor_thread.is_alive():
+                logger.warning("监控线程仍在运行，强制清理")
+            self._monitor_thread = None
+
+        if hasattr(self, '_monitor_stop_event') and self._monitor_stop_event:
+            self._monitor_stop_event.set()
+            self._monitor_stop_event = None
+
+        # 等待一段时间确保线程完全停止
+        import time
+        time.sleep(2)
+
+        logger.info("所有监控线程已停止")
 
     def _check_and_clear_port(self):
         """检查端口是否被占用，如果被占用则尝试停止占用进程"""
@@ -380,32 +783,26 @@ class MCPServer(_PluginBase):
         family = addr_info[0][0]  # AF_INET or AF_INET6
         sock_type = addr_info[0][1]
 
-        # 尝试使用 SO_REUSEADDR 选项
         s = socket.socket(family, sock_type)
         try:
-            # 设置 SO_REUSEADDR 选项，允许重用处于 TIME_WAIT 状态的端口
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            logger.info("已设置 SO_REUSEADDR 选项，允许重用 TIME_WAIT 状态的端口")
             s.bind((host, port))
             s.close()
-            logger.info(f"端口 {port}（{host}）未被占用或已成功重用")
+            logger.debug(f"端口 {port}（{host}）可用")
             return
         except socket.error as e:
-            logger.warning(f"端口 {port}（{host}）已被占用且无法重用，尝试处理: {e}")
+            logger.warning(f"端口 {port}（{host}）已被占用，尝试处理: {e}")
             s.close()
 
-        # 如果设置 SO_REUSEADDR 后仍然无法绑定，说明端口被其他进程占用
-        # 尝试再次检查，确认是否真的被占用
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            # 再次尝试设置 SO_REUSEADDR
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             s.bind((host, port))
             s.close()
-            logger.info(f"端口 {port} 未被占用或已成功重用")
-            return  # 端口未被占用，直接返回
+            logger.debug(f"端口 {port} 可用")
+            return
         except Exception as e:
-            logger.warning(f"端口 {port} 已被占用且无法重用 {str(e)}，尝试处理")
+            logger.warning(f"端口 {port} 已被占用，尝试清理")
             s.close()
 
         # 端口被占用，尝试终止占用进程
@@ -463,15 +860,11 @@ class MCPServer(_PluginBase):
         host = self._config["host"]
 
         try:
-            # 尝试导入psutil
             import psutil
-            logger.info(f"使用psutil查找占用端口 {port} 的进程")
 
-            # 查找占用端口的进程
             for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
                 try:
                     for conn in proc.connections(kind='inet'):
-                        # 检查是否是指定端口的连接
                         is_target_port = conn.laddr.port == port
                         is_bind_addr = (conn.laddr.ip == host or
                                         conn.laddr.ip == '0.0.0.0' or
@@ -479,17 +872,14 @@ class MCPServer(_PluginBase):
 
                         if is_target_port and is_bind_addr:
                             pid = proc.pid
-                            logger.info(f"找到占用端口的进程 PID: {pid}")
-
-                            # 检查是否为Python进程和MCP服务器
                             cmd_line = " ".join(
                                 proc.cmdline() if proc.cmdline() else []
                             )
-                            logger.info(f"进程命令行: {cmd_line}")
+                            logger.info(f"找到占用端口 {port} 的进程 PID: {pid}, 命令: {cmd_line}")
 
-                            # 判断是否为MCP服务器进程
                             is_python = "python" in cmd_line.lower()
-                            is_server = "server.py" in cmd_line
+                            is_server = (
+                                "server.py" in cmd_line or "sse_server.py" in cmd_line)
 
                             if is_python and is_server:
                                 return self._terminate_process(proc)
@@ -515,7 +905,7 @@ class MCPServer(_PluginBase):
 
             logger.info("确认是MCP服务器进程，尝试终止")
             proc.terminate()
-            gone, alive = psutil.wait_procs([proc], timeout=3)
+            _, alive = psutil.wait_procs([proc], timeout=3)
 
             if proc in alive:
                 logger.warning("进程未响应终止信号，尝试强制终止")
@@ -529,14 +919,13 @@ class MCPServer(_PluginBase):
 
     def _wait_for_port_release(self, port, host, timeout=10) -> bool:
         """等待端口释放"""
-        logger.info(f"等待端口 {port} 释放...")
         start_time = time.time()
         while time.time() - start_time < timeout:
             try:
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 s.bind((host, port))
                 s.close()
-                logger.info(f"端口 {port} 已释放，可以启动服务器")
+                logger.info(f"端口 {port} 已释放")
                 return True
             except socket.error:
                 time.sleep(0.5)
@@ -544,370 +933,75 @@ class MCPServer(_PluginBase):
         logger.error("等待端口释放超时")
         return False
 
-    def _monitor_process_thread(self, stop_event):
-        """监控服务器进程并在意外终止时重启"""
-        try:
-            logger.info("进程监控线程开始运行")
 
-            while not stop_event.is_set():
-                # 检查进程是否仍在运行
-                has_process = self._server_process is not None
-                terminated = (
-                    has_process and self._server_process.poll() is not None)
 
-                if has_process and terminated:
-                    exitcode = self._server_process.poll()
-                    logger.warning(f"服务器进程意外终止，返回码: {exitcode}，准备重启")
 
-                    # 等待一段时间后重启
-                    delay = self._config["restart_delay"]
-                    logger.info(f"将在{delay}秒后重启服务器")
-
-                    # 使用事件等待，以便能响应停止信号
-                    if stop_event.wait(delay):
-                        logger.info("收到停止信号，取消重启")
-                        break
-
-                    # 重启服务器
-                    logger.info("正在重启MCP服务器...")
-                    self._start_server()
-                    logger.info("服务器重启完成")
-
-                    # 如果启动失败，避免立即重试
-                    no_process = self._server_process is None
-                    failed = (
-                        has_process and self._server_process.poll() is not None)
-
-                    if no_process or failed:
-                        logger.error("服务器重启失败，将暂停监控一段时间")
-                        if stop_event.wait(60):  # 暂停监控60秒
-                            break
-
-                # 每隔5秒检查一次
-                if stop_event.wait(5):
-                    break
-
-        except Exception as e:
-            logger.error(f"进程监控线程发生异常: {str(e)}")
-            logger.error(traceback.format_exc())
-        finally:
-            logger.info("进程监控线程已结束")
-
-    def _stop_monitor_thread(self):
-        """停止进程监控线程"""
-        if self._monitor_stop_event and self._monitor_thread:
-            logger.info("正在停止进程监控线程...")
-            self._monitor_stop_event.set()
-
-            # 等待线程结束，但设置超时以避免阻塞
-            self._monitor_thread.join(timeout=3)
-            if self._monitor_thread.is_alive():
-                logger.warning("进程监控线程未能在3秒内正常停止")
-            else:
-                logger.info("进程监控线程已正常停止")
-
-            self._monitor_thread = None
-            self._monitor_stop_event = None
-
-    def _wait_for_server_startup(self) -> bool:
-        """等待服务器启动并进行健康检查"""
-        start_time = time.time()
-        check_count = 0
-        max_time = self._config["max_startup_time"]
-        interval = self._config["health_check_interval"]
-
-        logger.info(f"等待服务器启动，最长等待{max_time}秒")
-
-        while time.time() - start_time < max_time:
-            # 检查进程是否存在且仍在运行
-            if self._server_process is None:
-                logger.error("服务器进程引用丢失，可能已意外终止")
-                return False
-
-            if self._server_process.poll() is not None:
-                exitcode = self._server_process.poll()
-                logger.error(f"服务器进程已退出，返回码: {exitcode}")
-                # 清除进程引用，防止后续访问出错
-                self._server_process = None
-                return False
-
-            # 尝试连接服务器
-            try:
-                check_count += 1
-                url = self._health_check_url
-                logger.info(f"健康检查 #{check_count}: 请求 {url}")
-
-                # 在请求中加入token
-                headers = {}
-                auth_token = self._config.get("auth_token")
-                if auth_token:
-                    headers["Authorization"] = f"Bearer {auth_token}"
-
-                response = requests.get(url, headers=headers, timeout=2)
-                status = response.status_code
-                logger.info(f"健康检查返回: HTTP {status}")
-
-                # MCP端点会返回404或406状态码表示存在但未找到路由
-                if status in [404, 406]:
-                    logger.info("健康检查通过: 服务器正在运行")
-                    return True
-            except requests.RequestException as e:
-                logger.info(f"健康检查失败: {str(e)}")
-
-            # 等待一段时间后再次检查
-            time.sleep(interval)
-
-        logger.error(f"等待服务器启动超时 ({max_time})秒")
-        return False
-
-    def _stop_server(self):
-        """停止MCP服务器进程"""
-        # 先停止所有线程
-        self._stop_all_threads()
-
-        if self._server_process is not None:
-            try:
-                logger.info("正在停止MCP服务器进程...")
-
-                # 检查进程是否已经终止
-                if self._server_process.poll() is not None:
-                    exitcode = self._server_process.poll()
-                    logger.info(f"服务器进程已经终止，返回码: {exitcode}")
-                    self._server_process = None
-                    logger.info("MCP服务器进程已停止")
-                    return
-
-                try:
-                    # 优雅地终止进程 (Linux)
-                    self._server_process.send_signal(signal.SIGTERM)
-                except Exception as e:
-                    logger.error(f"发送SIGTERM信号失败: {str(e)}")
-                    # 如果发送信号失败，尝试直接kill
-                    try:
-                        self._server_process.kill()
-                        logger.info("已直接强制终止进程")
-                    except Exception as kill_error:
-                        logger.error(f"强制终止进程失败: {str(kill_error)}")
-
-                    # 无论如何清除进程引用
-                    self._server_process = None
-                    logger.info("MCP服务器进程引用已清除")
-                    return
-
-                # 给进程一些时间来优雅地关闭
-                process_exited = False
-                for i in range(5):  # 等待最多5秒
-                    try:
-                        if self._server_process.poll() is not None:
-                            exitcode = self._server_process.poll()
-                            logger.info(f"服务器进程已优雅退出，返回码: {exitcode}")
-                            process_exited = True
-                            break
-                        logger.info(f"等待服务器进程退出... ({i+1}/5)")
-                        time.sleep(1)
-                    except Exception as poll_error:
-                        logger.error(f"检查进程状态失败: {str(poll_error)}")
-                        process_exited = False
-                        break
-
-                # 如果进程仍在运行，强制终止
-                if not process_exited:
-                    try:
-                        if self._server_process and self._server_process.poll() is None:
-                            logger.info("优雅终止失败，强制终止进程")
-                            self._server_process.kill()
-                    except Exception as kill_error:
-                        logger.error(f"强制终止进程失败: {str(kill_error)}")
-
-                # 清除进程引用
-                self._server_process = None
-                logger.info("MCP服务器进程已停止")
-            except Exception as e:
-                logger.error(f"停止MCP服务器进程失败: {str(e)}")
-                logger.error(traceback.format_exc())
-                # 确保进程引用被清除
-                self._server_process = None
 
     def _get_server_status(self) -> Dict[str, Any]:
         """获取服务器详细状态"""
+        # 获取当前服务器类型和相关信息
+        server_type = self._config.get("server_type", "streamable")
+        host = self._config.get("host", "0.0.0.0")
+        port = self._config.get("port", 3111)
+
         # 初始化状态信息
         status = {
             "running": False,
             "pid": None,
             "url": None,
             "health": False,
+            "server_type": server_type,
+            "listen_address": f"{host}:{port}",
             "venv_path": str(self._venv_path) if self._venv_path else None,
             "python_bin": str(self._python_bin) if self._python_bin else None,
             "auth_token": self._mask_token(self._config.get("auth_token", "")),
             "requires_auth": True,
-            "resource_usage": None
+            "resource_usage": None,
+            "state": "unknown"
         }
 
         # 设置服务URL
         port = int(self._config["port"])
         host = self._config["host"]
-        status["url"] = f"http://{host}:{port}/mcp/"
+        if server_type == "sse":
+            status["url"] = f"http://{host}:{port}/sse/"
+        else:
+            status["url"] = f"http://{host}:{port}/mcp/"
 
-        # 检查内部进程引用
-        process_running = False
-        if self._server_process and self._server_process.poll() is None:
-            process_running = True
-            status["running"] = True
-            status["pid"] = self._server_process.pid
-            logger.info(f"内部进程引用检查: 服务器进程正在运行，PID: {self._server_process.pid}")
+        if self._process_manager:
+            status["state"] = self._process_manager.get_state().value
+            status["running"] = self._process_manager.is_running()
 
-        # 如果内部进程引用不存在，使用psutil查找进程
-        if not process_running:
-            try:
-                import psutil
+            if status["running"] and self._process_manager.process:
+                status["pid"] = self._process_manager.process.pid
 
-                # 方法1: 通过端口查找进程
-                for conn in psutil.net_connections(kind='inet'):
-                    if conn.laddr.port == port and conn.status == 'LISTEN' and conn.pid:
-                        try:
-                            proc = psutil.Process(conn.pid)
-                            cmd_line = " ".join(proc.cmdline() or [])
-
-                            # 判断是否为MCP服务器进程
-                            if "python" in cmd_line.lower() and "server.py" in cmd_line:
-                                status["running"] = True
-                                status["pid"] = conn.pid
-                                process_running = True
-                                logger.info(
-                                    f"通过端口 {port} 找到服务器进程，PID: {conn.pid}")
-                                break
-                        except (psutil.NoSuchProcess, psutil.AccessDenied):
-                            continue
-
-                # 方法2: 如果方法1未找到，通过进程名和命令行查找
-                if not process_running:
-                    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
-                        try:
-                            cmd_line = " ".join(proc.cmdline() or [])
-                            if "python" in cmd_line.lower() and "server.py" in cmd_line and f"--port {port}" in cmd_line:
-                                status["running"] = True
-                                status["pid"] = proc.pid
-                                process_running = True
-                                logger.info(f"通过命令行找到服务器进程，PID: {proc.pid}")
-                                break
-                        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                            continue
-            except ImportError:
-                logger.warning("psutil模块未安装，无法查找进程")
-            except Exception as e:
-                logger.error(f"使用psutil查找进程失败: {str(e)}")
-
-        # 进行健康检查
-        try:
-            # 在请求中加入token
-            headers = {}
-            auth_token = self._config.get("auth_token")
-            if auth_token:
-                headers["Authorization"] = f"Bearer {auth_token}"
-
-            # 发送健康检查请求
-            response = requests.get(
-                self._health_check_url,
-                headers=headers,
-                timeout=3
-            )
-
-            # MCP端点通常返回404或406
-            health_ok = response.status_code in [404, 406]
-            status["health"] = health_ok
-
-            # 如果健康检查通过，服务器一定在运行
-            if health_ok:
-                status["running"] = True
-                logger.info(f"健康检查成功: 服务器运行中 (HTTP {response.status_code})")
-        except requests.RequestException as e:
-            logger.debug(f"健康检查请求失败: {str(e)}")
-
-            # 如果进程正在运行，我们仍然认为服务器是运行的
-            if process_running:
-                logger.info("虽然健康检查请求失败，但进程正在运行，标记为运行状态")
-
-        # 如果服务器正在运行且有PID，获取资源占用信息
-        if status["running"] and status["pid"]:
-            try:
-                resource_usage = self._get_process_resource_usage(status["pid"])
-                status["resource_usage"] = resource_usage
-            except Exception as e:
-                logger.debug(f"获取进程资源占用信息失败: {str(e)}")
-                status["resource_usage"] = None
-
-        # 最终状态日志
-        logger.info(
-            "服务器状态: running=%s, health=%s, pid=%s",
-            status['running'], status['health'], status['pid']
-        )
-        return status
-
-    def _try_recover_process_reference(self, port: int) -> bool:
-        """尝试恢复进程引用"""
-        try:
-            # 尝试导入psutil
-            import psutil
-            logger.info(f"尝试恢复端口 {port} 的进程引用")
-
-            # 获取所有网络连接
-            connections = psutil.net_connections(kind='inet')
-
-            # 查找占用指定端口的连接
-            target_conns = [
-                conn for conn in connections
-                if (hasattr(conn, 'laddr') and
-                    conn.laddr.port == port and
-                    conn.status == 'LISTEN')
-            ]
-
-            if not target_conns:
-                logger.info(f"未找到占用端口 {port} 的连接")
-                return False
-
-            # 查找对应的进程
-            for conn in target_conns:
-                if not conn.pid:
-                    continue
+                if self._process_manager._health_check():
+                    status["health"] = True
+                else:
+                    logger.warning("健康检查失败")
 
                 try:
-                    proc = psutil.Process(conn.pid)
-                    pid = proc.pid
-                    logger.info(f"找到占用端口的进程 PID: {pid}")
+                    resource_usage = self._get_process_resource_usage(
+                        status["pid"])
+                    status["resource_usage"] = resource_usage
+                except Exception as e:
+                    logger.debug(f"获取进程资源占用信息失败: {str(e)}")
+                    status["resource_usage"] = None
+            else:
+                logger.debug(f"进程未运行: running={status['running']}")
+        else:
+            logger.error("ProcessManager不存在！")
 
-                    # 检查是否为Python进程和MCP服务器
-                    cmd_line = " ".join(proc.cmdline() or [])
-                    logger.info(f"进程命令行: {cmd_line}")
-
-                    # 判断是否为MCP服务器进程
-                    is_python = "python" in cmd_line.lower()
-                    is_server = "server.py" in cmd_line
-
-                    if is_python and is_server:
-                        logger.info(f"确认为MCP服务器进程: PID={pid}")
-                        # 这里不能直接恢复进程引用，因为需要subprocess.Popen对象
-                        # 但我们可以记录这个信息，供后续使用
-                        return True
-                except (psutil.NoSuchProcess,
-                        psutil.AccessDenied,
-                        psutil.ZombieProcess):
-                    continue
-
-            logger.info("未找到符合条件的MCP服务器进程")
-            return False
-        except ImportError:
-            logger.warning("psutil模块未安装，无法恢复进程引用")
-            return False
-        except Exception as e:
-            logger.error(f"恢复进程引用时出错: {str(e)}")
-            logger.error(traceback.format_exc())
-            return False
+        logger.debug(
+            f"服务器状态: running={status['running']}, health={status['health']}, "
+            f"pid={status['pid']}, state={status['state']}"
+        )
+        return status
 
     def _get_process_resource_usage(self, pid: int) -> Optional[Dict[str, Any]]:
         """获取指定进程的资源占用信息"""
         try:
             import psutil
-            from datetime import datetime
 
             proc = psutil.Process(pid)
 
@@ -979,7 +1073,7 @@ class MCPServer(_PluginBase):
             })
 
             # 检查服务器是否正在运行，如果在运行需要提示用户重启
-            if self._server_process and self._server_process.poll() is None:
+            if self._process_manager and self._process_manager.is_running():
                 message = "已生成新的API Token，需要重启服务器才能生效"
                 logger.info("已生成新token，但需要重启服务器才能应用")
             else:
@@ -1017,87 +1111,43 @@ class MCPServer(_PluginBase):
         """API Endpoint: Saves plugin configuration. Expects a dict payload."""
         logger.info(f"{self.plugin_name}: 收到配置保存请求: {config_payload}")
         try:
-            # 保存当前启用状态，用于检测变化
+            # 验证配置数据
+            if not isinstance(config_payload, dict):
+                raise ValueError("配置数据必须是字典格式")
+
+            # 检测配置变化（但不更新内部状态）
             previous_enable = self._enable
+            previous_server_type = self._config.get("server_type", "streamable")
 
-            # 更新配置
-            new_enable = config_payload.get('enable', self._enable)
-            if 'config' in config_payload:
-                self._config.update(config_payload['config'])
+            current_enable = config_payload.get('enable', False)
+            current_server_type = config_payload.get('config', {}).get("server_type", "streamable")
 
-            # 准备保存的配置
-            config_to_save = {
-                "enable": new_enable,
-                "config": self._config
-            }
+            enable_changed = previous_enable != current_enable
+            server_type_changed = previous_server_type != current_server_type
 
-            # 保存配置
-            self.update_config(config_to_save)
+            logger.info(
+                f"配置变化检测: enable={previous_enable}->{current_enable}, server_type={previous_server_type}->{current_server_type}")
 
-            # 检测启用状态变化
-            enable_changed = previous_enable != new_enable
-            self._enable = new_enable
+            # 保存到系统配置
+            from app.db.systemconfig_oper import SystemConfigOper
+            system_config = SystemConfigOper()
+            config_key = f"plugin.{self.plugin_name.lower()}"
+            system_config.set(config_key, config_payload)
 
-            # 根据启用状态变化处理服务器进程
-            if enable_changed:
-                if new_enable:
-                    # 从禁用变为启用，尝试启动服务器
-                    logger.info("插件从禁用变为启用，尝试启动服务器")
+            # 不在这里更新内部配置，让init_plugin来处理
+            # 这样可以确保init_plugin能正确检测到配置变化
+            logger.info("配置已保存，等待MoviePilot调用init_plugin处理服务器操作")
 
-                    # 检查用户名和密码是否已配置
-                    username = self._config.get("mp_username", "")
-                    password = self._config.get("mp_password", "")
-
-                    if not username or not password:
-                        logger.error("未配置 MoviePilot 用户名或密码，无法启动服务器")
-                        return {
-                            "message": "配置已保存，但未配置 MoviePilot 用户名或密码，无法启动服务器",
-                            "saved_config": self._get_config()
-                        }
-
-                    # 尝试获取 access_token
-                    access_token = self._get_moviepilot_access_token()
-                    if not access_token:
-                        logger.error("无法获取 MoviePilot 的 access token，无法启动服务器")
-                        return {
-                            "message": "配置已保存，但无法获取 MoviePilot 的 access token，无法启动服务器",
-                            "saved_config": self._get_config()
-                        }
-
-                    # 保存 access_token 到配置
-                    self._config["access_token"] = access_token
-                    logger.info("已获取 MoviePilot 的 access token，将用于 API 请求")
-
-                    # 启动服务器
-                    self._start_server()
-                    logger.info("服务器已启动")
-
-                    return {
-                        "message": "配置已保存，服务器已启动",
-                        "saved_config": self._get_config()
-                    }
-                else:
-                    # 从启用变为禁用，停止服务器
-                    logger.info("插件从启用变为禁用，停止服务器")
-                    self._stop_server()
-                    logger.info("服务器已停止")
-
-                    return {
-                        "message": "配置已保存，服务器已停止",
-                        "saved_config": self._get_config()
-                    }
-
-            # 如果启用状态没有变化，只返回保存成功的消息
-            logger.info(f"{self.plugin_name}: 配置已保存")
-
-            # 返回最终状态
             return {
-                "message": "配置已成功保存",
-                "saved_config": self._get_config()
+                "message": "配置已保存",
+                "saved_config": self._get_config(),
+                "enable_changed": enable_changed,
+                "server_type_changed": server_type_changed
             }
 
         except Exception as e:
-            logger.error(f"{self.plugin_name}: 保存配置时发生错误: {e}", exc_info=True)
+            logger.error(f"{self.plugin_name}: 保存配置时发生错误: {e}",
+                         exc_info=True)
             return {
                 "message": f"保存配置失败: {e}",
                 "error": True,
@@ -1109,60 +1159,25 @@ class MCPServer(_PluginBase):
         try:
             logger.info("正在执行服务器重启...")
 
-            # 先停止服务器
-            logger.info("正在停止服务器进程...")
-            self._stop_server()
-            logger.info("服务器进程已停止，等待端口释放...")
-            time.sleep(2)  # 增加等待时间，确保端口完全释放
+            # 重启服务器
+            if self._process_manager and self._process_manager.restart_server():
+                # 等待服务器完全启动
+                time.sleep(5)
 
-            # 检查用户名和密码是否已配置
-            username = self._config.get("mp_username", "")
-            password = self._config.get("mp_password", "")
+                # 获取最新状态
+                current_status = self._get_server_status()
 
-            if not username or not password:
-                logger.error("未配置 MoviePilot 用户名或密码，无法重启服务器")
-                return {
-                    "message": "服务器已停止，但未配置 MoviePilot 用户名或密码，无法重新启动",
-                    "error": True,
-                    "server_status": self._get_server_status()
-                }
-
-            # 尝试获取 access_token
-            access_token = self._get_moviepilot_access_token()
-            if not access_token:
-                logger.error("无法获取 MoviePilot 的 access token，无法重启服务器")
-                return {
-                    "message": "服务器已停止，但无法获取 MoviePilot 的 access token，无法重新启动",
-                    "error": True,
-                    "server_status": self._get_server_status()
-                }
-
-            # 保存 access_token 到配置
-            self._config["access_token"] = access_token
-            logger.info("已获取 MoviePilot 的 access token，将用于 API 请求")
-
-            # 启动服务器
-            logger.info("正在重新启动服务器进程...")
-            self._start_server()
-
-            # 等待服务器启动
-            time.sleep(3)
-
-            # 获取最新状态
-            current_status = self._get_server_status()
-
-            if current_status["running"]:
-                logger.info("服务器已成功重启")
                 return {
                     "message": "服务器已成功重启",
                     "server_status": current_status
                 }
             else:
-                logger.warning("服务器重启后状态检查失败，可能需要手动刷新状态")
                 return {
-                    "message": "服务器重启过程完成，但状态检查未通过，请手动刷新状态",
-                    "server_status": current_status
+                    "message": "服务器重启失败，请检查配置和日志",
+                    "error": True,
+                    "server_status": self._get_server_status()
                 }
+
         except Exception as e:
             logger.error(f"重启服务器失败: {str(e)}")
             logger.error(traceback.format_exc())
@@ -1253,63 +1268,31 @@ class MCPServer(_PluginBase):
         """API Endpoint: 启动服务器"""
         try:
             # 检查服务器是否已经在运行
-            status = self._get_server_status()
-            if status["running"]:
+            if self._process_manager and self._process_manager.is_running():
                 return {
                     "message": "服务器已经在运行中",
-                    "server_status": status
-                }
-
-            # 检查用户名和密码是否已配置
-            username = self._config.get("mp_username", "")
-            password = self._config.get("mp_password", "")
-
-            if not username or not password:
-                logger.error("未配置 MoviePilot 用户名或密码，无法启动服务器")
-                logger.error("请在插件配置页面填写 MoviePilot 用户名和密码")
-                return {
-                    "message": "未配置 MoviePilot 用户名或密码，无法启动服务器",
-                    "error": True,
                     "server_status": self._get_server_status()
                 }
-
-            # 尝试获取 access_token
-            access_token = self._get_moviepilot_access_token()
-            if not access_token:
-                logger.error("无法获取 MoviePilot 的 access token，无法启动服务器")
-                logger.error("请检查 MoviePilot 用户名和密码是否正确")
-                return {
-                    "message": "无法获取 MoviePilot 的 access token，无法启动服务器",
-                    "error": True,
-                    "server_status": self._get_server_status()
-                }
-
-            # 保存 access_token 到配置
-            self._config["access_token"] = access_token
-            logger.info("已获取 MoviePilot 的 access token，将用于 API 请求")
 
             # 启动服务器
-            self._start_server()
+            if self._process_manager and self._process_manager.start_server():
+                # 等待服务器完全启动
+                time.sleep(3)
 
-            # 等待服务器完全启动
-            time.sleep(3)
+                # 获取最新状态
+                current_status = self._get_server_status()
 
-            # 获取最新状态
-            current_status = self._get_server_status()
-
-            # 记录启动结果
-            if current_status["running"]:
-                logger.info(f"服务器已成功启动，PID: {current_status['pid']}")
                 return {
                     "message": "服务器已成功启动",
                     "server_status": current_status
                 }
             else:
-                logger.warning("服务器启动后状态检查失败，可能需要手动刷新状态")
                 return {
-                    "message": "服务器已启动，但状态检查未通过，请手动刷新状态",
-                    "server_status": current_status
+                    "message": "服务器启动失败，请检查配置和日志",
+                    "error": True,
+                    "server_status": self._get_server_status()
                 }
+
         except Exception as e:
             logger.error(f"启动服务器失败: {str(e)}")
             logger.error(traceback.format_exc())
@@ -1323,35 +1306,31 @@ class MCPServer(_PluginBase):
         """API Endpoint: 停止服务器"""
         try:
             # 检查服务器是否已经停止
-            status = self._get_server_status()
-            if not status["running"]:
+            if self._process_manager and not self._process_manager.is_running():
                 return {
                     "message": "服务器已经停止",
-                    "server_status": status
+                    "server_status": self._get_server_status()
                 }
 
             # 停止服务器
-            self._stop_server()
+            if self._process_manager and self._process_manager.stop_server():
+                # 等待服务器完全停止
+                time.sleep(2)
 
-            # 等待服务器完全停止
-            time.sleep(2)
+                # 获取最新状态
+                current_status = self._get_server_status()
 
-            # 获取最新状态
-            current_status = self._get_server_status()
-
-            # 记录停止结果
-            if not current_status["running"]:
-                logger.info("服务器已成功停止")
                 return {
                     "message": "服务器已成功停止",
                     "server_status": current_status
                 }
             else:
-                logger.warning("服务器停止后状态检查失败，可能需要手动刷新状态")
                 return {
                     "message": "服务器停止失败，请手动刷新状态",
-                    "server_status": current_status
+                    "error": True,
+                    "server_status": self._get_server_status()
                 }
+
         except Exception as e:
             logger.error(f"停止服务器失败: {str(e)}")
             logger.error(traceback.format_exc())
@@ -1376,7 +1355,7 @@ class MCPServer(_PluginBase):
             return {
                 "enable": self._enable,
                 "server_status": status,
-                "message": "获取服务器状态成功!!!"
+                "message": "获取服务器状态成功"
             }
         except Exception as e:
             logger.error(f"获取服务器状态失败: {str(e)}")
@@ -1402,7 +1381,8 @@ class MCPServer(_PluginBase):
                 return {
                     "message": "MCP服务器未运行或无法获取进程ID",
                     "error": True,
-                    "process_stats": None
+                    "process_stats": None,
+                    "enable": self._enable,
                 }
 
             pid = status["pid"]
@@ -1466,33 +1446,38 @@ class MCPServer(_PluginBase):
                     return {
                         "message": "获取进程统计信息成功",
                         "process_stats": process_stats,
-                        "server_status": status
+                        "server_status": status,
+                        "enable": self._enable,
                     }
 
             except ImportError:
                 return {
                     "message": "psutil模块未安装，无法获取进程统计信息",
                     "error": True,
-                    "process_stats": None
+                    "process_stats": None,
+                    "enable": self._enable,
                 }
             except psutil.NoSuchProcess:
                 return {
                     "message": f"进程 {pid} 不存在",
                     "error": True,
-                    "process_stats": None
+                    "process_stats": None,
+                    "enable": self._enable,
                 }
             except psutil.AccessDenied:
                 return {
                     "message": f"无权限访问进程 {pid}",
                     "error": True,
-                    "process_stats": None
+                    "process_stats": None,
+                    "enable": self._enable,
                 }
             except Exception as e:
                 logger.error(f"获取进程统计信息时出错: {str(e)}")
                 return {
                     "message": f"获取进程统计信息时出错: {str(e)}",
                     "error": True,
-                    "process_stats": None
+                    "process_stats": None,
+                    "enable": self._enable,
                 }
 
         except Exception as e:
@@ -1501,7 +1486,8 @@ class MCPServer(_PluginBase):
             return {
                 "message": f"获取进程统计信息失败: {str(e)}",
                 "error": True,
-                "process_stats": None
+                "process_stats": None,
+                "enable": self._enable,
             }
 
     def _download_torrent_api(self, body: dict = None) -> Dict[str, Any]:
@@ -1550,8 +1536,6 @@ class MCPServer(_PluginBase):
             # 导入必要的模块
             from app.db.site_oper import SiteOper
             from app.utils.string import StringUtils
-            from app.helper.downloader import DownloaderHelper
-            from app.schemas import ServiceInfo
 
             # 初始化辅助类
             site_oper = SiteOper()
@@ -1698,8 +1682,8 @@ class MCPServer(_PluginBase):
         return []  # No commands defined for this plugin
 
     def stop_service(self):
-        """停止服务"""
-        self._stop_server()
+        """停止服务和所有线程"""
+        return
 
     def get_dashboard_meta(self) -> Optional[List[Dict[str, str]]]:
         """获取插件仪表盘元信息"""
@@ -1721,8 +1705,10 @@ class MCPServer(_PluginBase):
             kwargs: 额外参数，未使用
         """
         # 获取Dashboard配置
-        dashboard_refresh_interval = self._config.get("dashboard_refresh_interval", 30)
-        dashboard_auto_refresh = self._config.get("dashboard_auto_refresh", True)
+        dashboard_refresh_interval = self._config.get(
+            "dashboard_refresh_interval", 30)
+        dashboard_auto_refresh = self._config.get(
+            "dashboard_auto_refresh", True)
 
         return {
             "cols": 12,
@@ -1738,15 +1724,3 @@ class MCPServer(_PluginBase):
                 "dashboard_auto_refresh": dashboard_auto_refresh
             }
         }, None
-
-
-if __name__ == "__main__":
-    plugin = MCPServer()
-    config = {
-        "enable": True,
-        "config": {
-            "host": "127.0.0.1",
-            "port": 3111
-        }
-    }
-    plugin.init_plugin(config)

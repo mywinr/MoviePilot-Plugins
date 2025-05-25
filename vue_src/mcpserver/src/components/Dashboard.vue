@@ -35,6 +35,15 @@
                   <div>
                     <div class="text-subtitle-2 font-weight-medium d-flex align-center">
                       MCP服务器
+                      <v-chip
+                        v-if="serverType"
+                        :color="serverTypeColor"
+                        size="x-small"
+                        variant="tonal"
+                        class="ml-2"
+                      >
+                        {{ serverTypeText }}
+                      </v-chip>
                     </div>
                     <div class="text-caption text-medium-emphasis">{{ serverStatusText }}</div>
                   </div>
@@ -399,6 +408,7 @@ const initialLoading = ref(true)  // 初始加载状态
 const refreshing = ref(false)     // 刷新状态
 const lastUpdateTime = ref('')
 const showChart = ref(false)      // 控制图表显示
+const serverType = ref('')        // 服务器类型
 
 // 资源监控相关
 const currentCpu = ref(0)
@@ -450,6 +460,29 @@ const serverStatusText = computed(() => {
   const serverItem = items.value.find(item => item.title === '服务器状态')
   if (!serverItem) return '状态未知'
   return serverItem.subtitle || '状态未知'
+})
+
+// 服务器类型相关计算属性
+const serverTypeText = computed(() => {
+  switch (serverType.value) {
+    case 'sse':
+      return 'SSE'
+    case 'streamable':
+      return 'HTTP'
+    default:
+      return '未知'
+  }
+})
+
+const serverTypeColor = computed(() => {
+  switch (serverType.value) {
+    case 'sse':
+      return 'warning'
+    case 'streamable':
+      return 'primary'
+    default:
+      return 'grey'
+  }
 })
 
 
@@ -759,9 +792,15 @@ async function fetchDashboardData(isInitial = false) {
     const serverStatus = statusData?.server_status || statusData || {}
     const processStats = processStatsData?.process_stats || processStatsData || null
 
+    // 更新服务器类型
+    if (serverStatus.server_type) {
+      serverType.value = serverStatus.server_type
+    }
+
     // 调试信息
     console.log('Dashboard: 数据获取完成')
     console.log('Dashboard: serverStatus.running =', serverStatus.running)
+    console.log('Dashboard: serverStatus.server_type =', serverStatus.server_type)
     console.log('Dashboard: processStatsData.error =', processStatsData?.error)
     console.log('Dashboard: statusData =', statusData)
     console.log('Dashboard: processStatsData =', processStatsData)

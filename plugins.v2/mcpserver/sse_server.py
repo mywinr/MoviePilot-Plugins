@@ -156,7 +156,7 @@ async def run_server(
         return await prompt_manager.get_prompt(name, arguments)
 
     # 创建SSE传输
-    sse_transport = SseServerTransport("/messages")
+    sse_transport = SseServerTransport("/messages/")
 
     # SSE连接处理器 - 使用ASGI格式
     async def handle_sse(scope, receive, send):

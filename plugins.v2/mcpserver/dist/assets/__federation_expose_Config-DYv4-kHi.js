@@ -126,6 +126,11 @@ onMounted(() => {
       if ('dashboard_auto_refresh' in props.initialConfig.config) {
         config.dashboard_auto_refresh = props.initialConfig.config.dashboard_auto_refresh;
       }
+
+      // 处理服务器类型
+      if ('server_type' in props.initialConfig.config) {
+        config.server_type = props.initialConfig.config.server_type;
+      }
     }
 
     console.log('处理后的配置:', config);
@@ -146,8 +151,9 @@ async function saveConfig() {
   error.value = null;
 
   try {
-    // 模拟API调用等待
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    // 记录原始服务器类型，用于检测变化
+    const originalServerType = props.initialConfig?.config?.server_type || 'streamable';
+    const newServerType = config.server_type;
 
     // 构建符合后端期望的数据结构
     const configToSave = {
@@ -164,13 +170,50 @@ async function saveConfig() {
     };
     console.log('保存配置:', configToSave);
 
-    // 发送保存事件
-    emit('save', configToSave);
+    // 如果服务器类型发生变化，显示特殊提示
+    if (originalServerType !== newServerType) {
+      console.log(`服务器类型从 ${originalServerType} 变更为 ${newServerType}`);
+    }
+
+    // 直接调用插件的自定义配置保存API
+    if (props.api && props.api.post) {
+      const pluginId = getPluginId();
+      console.log('调用插件配置保存API:', `plugin/${pluginId}/config`);
+
+      const response = await props.api.post(`plugin/${pluginId}/config`, configToSave);
+
+      if (response && (response.success !== false)) {
+        // 保存成功
+        successMessage.value = response.message || '配置已成功保存';
+
+        // 如果服务器类型发生变化，显示特殊提示
+        if (response.server_type_changed) {
+          successMessage.value = response.message || '配置已保存，服务器类型已切换并重启';
+        }
+
+        console.log('配置保存成功:', response);
+
+        // 同时发送保存事件给父组件（用于标准流程）
+        emit('save', configToSave);
+      } else {
+        throw new Error(response?.message || '保存配置失败')
+      }
+    } else {
+      // 如果API不可用，回退到标准流程
+      console.log('API不可用，使用标准保存流程');
+      emit('save', configToSave);
+    }
   } catch (err) {
     console.error('保存配置失败:', err);
     error.value = err.message || '保存配置失败';
   } finally {
     saving.value = false;
+
+    // 5秒后自动清除消息
+    setTimeout(() => {
+      successMessage.value = null;
+      error.value = null;
+    }, 5000);
   }
 }
 
@@ -187,7 +230,7 @@ function resetForm() {
 
 // 获取插件ID
 function getPluginId() {
-  return "mcpserver";
+  return "MCPServer";
 }
 
 // 重置API密钥
@@ -698,6 +741,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const ConfigComponent = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-4201da73"]]);
+const ConfigComponent = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-c69d528d"]]);
 
 export { ConfigComponent as default };

@@ -18,38 +18,39 @@ const _hoisted_5 = {
 const _hoisted_6 = { class: "status-header mb-4" };
 const _hoisted_7 = { class: "d-flex align-center justify-space-between" };
 const _hoisted_8 = { class: "d-flex align-center" };
-const _hoisted_9 = { class: "text-caption text-medium-emphasis" };
-const _hoisted_10 = { class: "d-flex align-center" };
-const _hoisted_11 = {
+const _hoisted_9 = { class: "text-subtitle-2 font-weight-medium d-flex align-center" };
+const _hoisted_10 = { class: "text-caption text-medium-emphasis" };
+const _hoisted_11 = { class: "d-flex align-center" };
+const _hoisted_12 = {
   key: 0,
   class: "info-section"
 };
-const _hoisted_12 = { class: "d-flex align-center justify-space-between" };
-const _hoisted_13 = { class: "d-flex align-center" };
-const _hoisted_14 = {
+const _hoisted_13 = { class: "d-flex align-center justify-space-between" };
+const _hoisted_14 = { class: "d-flex align-center" };
+const _hoisted_15 = {
   key: 0,
   class: "d-flex justify-center align-center py-8"
 };
-const _hoisted_15 = { class: "text-center" };
-const _hoisted_16 = {
+const _hoisted_16 = { class: "text-center" };
+const _hoisted_17 = {
   key: 1,
   class: "dashboard-main"
 };
-const _hoisted_17 = { class: "status-overview mb-4" };
-const _hoisted_18 = { class: "d-flex align-center justify-space-between" };
-const _hoisted_19 = {
+const _hoisted_18 = { class: "status-overview mb-4" };
+const _hoisted_19 = { class: "d-flex align-center justify-space-between" };
+const _hoisted_20 = {
   key: 0,
   class: "chart-section mb-4"
 };
-const _hoisted_20 = { class: "monitoring-panel" };
-const _hoisted_21 = { class: "metrics-overview mb-4" };
-const _hoisted_22 = { class: "text-center" };
+const _hoisted_21 = { class: "monitoring-panel" };
+const _hoisted_22 = { class: "metrics-overview mb-4" };
 const _hoisted_23 = { class: "text-center" };
 const _hoisted_24 = { class: "text-center" };
 const _hoisted_25 = { class: "text-center" };
-const _hoisted_26 = { class: "d-flex align-center" };
-const _hoisted_27 = ["d", "stroke-width"];
+const _hoisted_26 = { class: "text-center" };
+const _hoisted_27 = { class: "d-flex align-center" };
 const _hoisted_28 = ["d", "stroke-width"];
+const _hoisted_29 = ["d", "stroke-width"];
 
 const {ref,computed,onMounted,onUnmounted} = await importShared('vue');
 
@@ -96,6 +97,7 @@ const initialLoading = ref(true);  // 初始加载状态
 const refreshing = ref(false);     // 刷新状态
 const lastUpdateTime = ref('');
 const showChart = ref(false);      // 控制图表显示
+const serverType = ref('');        // 服务器类型
 
 // 资源监控相关
 const currentCpu = ref(0);
@@ -147,6 +149,29 @@ const serverStatusText = computed(() => {
   const serverItem = items.value.find(item => item.title === '服务器状态');
   if (!serverItem) return '状态未知'
   return serverItem.subtitle || '状态未知'
+});
+
+// 服务器类型相关计算属性
+const serverTypeText = computed(() => {
+  switch (serverType.value) {
+    case 'sse':
+      return 'SSE'
+    case 'streamable':
+      return 'HTTP'
+    default:
+      return '未知'
+  }
+});
+
+const serverTypeColor = computed(() => {
+  switch (serverType.value) {
+    case 'sse':
+      return 'warning'
+    case 'streamable':
+      return 'primary'
+    default:
+      return 'grey'
+  }
 });
 
 
@@ -456,9 +481,15 @@ async function fetchDashboardData(isInitial = false) {
     const serverStatus = statusData?.server_status || statusData || {};
     const processStats = processStatsData?.process_stats || processStatsData || null;
 
+    // 更新服务器类型
+    if (serverStatus.server_type) {
+      serverType.value = serverStatus.server_type;
+    }
+
     // 调试信息
     console.log('Dashboard: 数据获取完成');
     console.log('Dashboard: serverStatus.running =', serverStatus.running);
+    console.log('Dashboard: serverStatus.server_type =', serverStatus.server_type);
     console.log('Dashboard: processStatsData.error =', processStatsData?.error);
     console.log('Dashboard: statusData =', statusData);
     console.log('Dashboard: processStatsData =', processStatsData);
@@ -657,11 +688,27 @@ return (_ctx, _cache) => {
                                 _: 1
                               }, 8, ["color"]),
                               _createElementVNode("div", null, [
-                                _cache[2] || (_cache[2] = _createElementVNode("div", { class: "text-subtitle-2 font-weight-medium d-flex align-center" }, " MCP服务器 ", -1)),
-                                _createElementVNode("div", _hoisted_9, _toDisplayString(serverStatusText.value), 1)
+                                _createElementVNode("div", _hoisted_9, [
+                                  _cache[2] || (_cache[2] = _createTextVNode(" MCP服务器 ")),
+                                  (serverType.value)
+                                    ? (_openBlock(), _createBlock(_component_v_chip, {
+                                        key: 0,
+                                        color: serverTypeColor.value,
+                                        size: "x-small",
+                                        variant: "tonal",
+                                        class: "ml-2"
+                                      }, {
+                                        default: _withCtx(() => [
+                                          _createTextVNode(_toDisplayString(serverTypeText.value), 1)
+                                        ]),
+                                        _: 1
+                                      }, 8, ["color"]))
+                                    : _createCommentVNode("", true)
+                                ]),
+                                _createElementVNode("div", _hoisted_10, _toDisplayString(serverStatusText.value), 1)
                               ])
                             ]),
-                            _createElementVNode("div", _hoisted_10, [
+                            _createElementVNode("div", _hoisted_11, [
                               (refreshing.value)
                                 ? (_openBlock(), _createBlock(_component_v_progress_circular, {
                                     key: 0,
@@ -687,7 +734,7 @@ return (_ctx, _cache) => {
                           ])
                         ]),
                         (_ctx.items.length)
-                          ? (_openBlock(), _createElementBlock("div", _hoisted_11, [
+                          ? (_openBlock(), _createElementBlock("div", _hoisted_12, [
                               _createVNode(_component_v_card, {
                                 variant: "outlined",
                                 class: "info-card"
@@ -782,8 +829,8 @@ return (_ctx, _cache) => {
           default: _withCtx(() => [
             _createVNode(_component_v_card_item, null, {
               default: _withCtx(() => [
-                _createElementVNode("div", _hoisted_12, [
-                  _createElementVNode("div", _hoisted_13, [
+                _createElementVNode("div", _hoisted_13, [
+                  _createElementVNode("div", _hoisted_14, [
                     _createVNode(_component_v_avatar, {
                       size: "48",
                       class: "mr-4 plugin-logo"
@@ -846,8 +893,8 @@ return (_ctx, _cache) => {
             _createVNode(_component_v_card_text, null, {
               default: _withCtx(() => [
                 (initialLoading.value)
-                  ? (_openBlock(), _createElementBlock("div", _hoisted_14, [
-                      _createElementVNode("div", _hoisted_15, [
+                  ? (_openBlock(), _createElementBlock("div", _hoisted_15, [
+                      _createElementVNode("div", _hoisted_16, [
                         _createVNode(_component_v_progress_circular, {
                           indeterminate: "",
                           color: "primary",
@@ -856,8 +903,8 @@ return (_ctx, _cache) => {
                         _cache[5] || (_cache[5] = _createElementVNode("div", { class: "text-caption mt-2 text-medium-emphasis" }, "正在加载MCP服务器状态...", -1))
                       ])
                     ]))
-                  : (_openBlock(), _createElementBlock("div", _hoisted_16, [
-                      _createElementVNode("div", _hoisted_17, [
+                  : (_openBlock(), _createElementBlock("div", _hoisted_17, [
+                      _createElementVNode("div", _hoisted_18, [
                         _createVNode(_component_v_alert, {
                           type: showChart.value ? 'success' : 'error',
                           variant: "tonal",
@@ -865,7 +912,7 @@ return (_ctx, _cache) => {
                           icon: showChart.value ? 'mdi-check-circle' : 'mdi-alert-circle'
                         }, {
                           default: _withCtx(() => [
-                            _createElementVNode("div", _hoisted_18, [
+                            _createElementVNode("div", _hoisted_19, [
                               _createElementVNode("span", null, "MCP服务器" + _toDisplayString(showChart.value ? '运行中' : '已停止'), 1),
                               _createVNode(_component_v_chip, {
                                 size: "small",
@@ -882,7 +929,7 @@ return (_ctx, _cache) => {
                         }, 8, ["type", "icon"])
                       ]),
                       (showChart.value)
-                        ? (_openBlock(), _createElementBlock("div", _hoisted_19, [
+                        ? (_openBlock(), _createElementBlock("div", _hoisted_20, [
                             _createVNode(_component_v_card, {
                               variant: "tonal",
                               class: "chart-card"
@@ -916,8 +963,8 @@ return (_ctx, _cache) => {
                                 }),
                                 _createVNode(_component_v_card_text, { class: "pt-0" }, {
                                   default: _withCtx(() => [
-                                    _createElementVNode("div", _hoisted_20, [
-                                      _createElementVNode("div", _hoisted_21, [
+                                    _createElementVNode("div", _hoisted_21, [
+                                      _createElementVNode("div", _hoisted_22, [
                                         _createVNode(_component_v_row, { dense: "" }, {
                                           default: _withCtx(() => [
                                             _createVNode(_component_v_col, {
@@ -931,7 +978,7 @@ return (_ctx, _cache) => {
                                                   color: currentCpu.value > 80 ? 'error' : currentCpu.value > 50 ? 'warning' : 'success'
                                                 }, {
                                                   default: _withCtx(() => [
-                                                    _createElementVNode("div", _hoisted_22, [
+                                                    _createElementVNode("div", _hoisted_23, [
                                                       _createVNode(_component_v_icon, {
                                                         size: _unref(xs) ? '20' : '24',
                                                         class: "mb-1 mb-sm-2",
@@ -966,7 +1013,7 @@ return (_ctx, _cache) => {
                                                   color: currentMemory.value > 80 ? 'error' : currentMemory.value > 50 ? 'warning' : 'success'
                                                 }, {
                                                   default: _withCtx(() => [
-                                                    _createElementVNode("div", _hoisted_23, [
+                                                    _createElementVNode("div", _hoisted_24, [
                                                       _createVNode(_component_v_icon, {
                                                         size: _unref(xs) ? '20' : '24',
                                                         class: "mb-1 mb-sm-2",
@@ -1001,7 +1048,7 @@ return (_ctx, _cache) => {
                                                   color: "info"
                                                 }, {
                                                   default: _withCtx(() => [
-                                                    _createElementVNode("div", _hoisted_24, [
+                                                    _createElementVNode("div", _hoisted_25, [
                                                       _createVNode(_component_v_icon, {
                                                         size: _unref(xs) ? '20' : '24',
                                                         class: "mb-1 mb-sm-2",
@@ -1036,7 +1083,7 @@ return (_ctx, _cache) => {
                                                   color: "primary"
                                                 }, {
                                                   default: _withCtx(() => [
-                                                    _createElementVNode("div", _hoisted_25, [
+                                                    _createElementVNode("div", _hoisted_26, [
                                                       _createVNode(_component_v_icon, {
                                                         size: _unref(xs) ? '20' : '24',
                                                         class: "mb-1 mb-sm-2",
@@ -1106,7 +1153,7 @@ return (_ctx, _cache) => {
                                                     }, _toDisplayString(processInfo.value.runtime), 3)
                                                   ])
                                                 ], 2),
-                                                _createElementVNode("div", _hoisted_26, [
+                                                _createElementVNode("div", _hoisted_27, [
                                                   _createElementVNode("div", {
                                                     class: _normalizeClass(_unref(xs) ? 'mr-2' : 'text-right mr-3')
                                                   }, [
@@ -1218,7 +1265,7 @@ return (_ctx, _cache) => {
                                                     "stroke-linejoin": "round",
                                                     "vector-effect": "non-scaling-stroke",
                                                     filter: "drop-shadow(0 2px 4px rgba(255, 107, 107, 0.3))"
-                                                  }, null, 8, _hoisted_27)
+                                                  }, null, 8, _hoisted_28)
                                                 ], 4)),
                                                 _createElementVNode("div", {
                                                   class: "y-axis-labels",
@@ -1320,7 +1367,7 @@ return (_ctx, _cache) => {
                                                     "stroke-linejoin": "round",
                                                     "vector-effect": "non-scaling-stroke",
                                                     filter: "drop-shadow(0 2px 4px rgba(78, 205, 196, 0.3))"
-                                                  }, null, 8, _hoisted_28)
+                                                  }, null, 8, _hoisted_29)
                                                 ], 4)),
                                                 _createElementVNode("div", {
                                                   class: "y-axis-labels",
@@ -1367,6 +1414,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const DashboardComponent = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-7740ec41"]]);
+const DashboardComponent = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-d7bcecce"]]);
 
 export { DashboardComponent as default };

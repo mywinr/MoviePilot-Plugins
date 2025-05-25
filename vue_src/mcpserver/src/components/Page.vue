@@ -41,6 +41,38 @@
                     </v-chip>
                   </template>
                 </v-list-item>
+
+                <v-list-item class="px-3 py-1">
+                  <template v-slot:prepend>
+                    <v-icon color="primary" icon="mdi-server-network" size="small" />
+                  </template>
+                  <v-list-item-title class="text-caption">服务器类型</v-list-item-title>
+                  <template v-slot:append>
+                    <v-chip
+                      color="primary"
+                      size="x-small"
+                      variant="tonal"
+                    >
+                      {{ getServerTypeText(serverStatus.server_type) }}
+                    </v-chip>
+                  </template>
+                </v-list-item>
+
+                <v-list-item class="px-3 py-1">
+                  <template v-slot:prepend>
+                    <v-icon color="info" icon="mdi-link" size="small" />
+                  </template>
+                  <v-list-item-title class="text-caption">监听地址</v-list-item-title>
+                  <template v-slot:append>
+                    <v-chip
+                      color="info"
+                      size="x-small"
+                      variant="tonal"
+                    >
+                      {{ serverStatus.url || '未知' }}
+                    </v-chip>
+                  </template>
+                </v-list-item>
                 <v-divider class="my-1"></v-divider>
                 <v-list-item class="px-3 py-1">
                   <template v-slot:prepend>
@@ -65,16 +97,6 @@
                     >
                       {{ serverStatus.health ? '正常' : '异常' }}
                     </v-chip>
-                  </template>
-                </v-list-item>
-                <v-divider class="my-1"></v-divider>
-                <v-list-item class="px-3 py-1">
-                  <template v-slot:prepend>
-                    <v-icon icon="mdi-link" color="info" size="small" />
-                  </template>
-                  <v-list-item-title class="text-caption">监听地址</v-list-item-title>
-                  <template v-slot:append>
-                    <span class="text-caption">{{ serverStatus.url || '未知' }}</span>
                   </template>
                 </v-list-item>
               </v-list>
@@ -324,16 +346,12 @@ async function fetchServerStatus() {
   }
 
   try {
-    console.log('尝试直接获取服务器状态...')
+    console.log('获取服务器状态...')
 
-    // 并行获取服务器状态和进程统计信息
-    const [statusData, processStatsData] = await Promise.all([
-      props.api.get(`plugin/${pluginId}/status`),
-      props.api.get(`plugin/${pluginId}/process-stats`).catch(() => null) // 进程统计可能失败，不影响主流程
-    ])
+    // 获取服务器状态（包含进程统计信息）
+    const statusData = await props.api.get(`plugin/${pluginId}/process-stats`)
 
-    console.log('直接获取的状态数据:', statusData)
-    console.log('进程统计数据:', processStatsData)
+    console.log('服务器状态数据:', statusData)
 
     if (statusData) {
       // 更新服务器状态
@@ -347,8 +365,8 @@ async function fetchServerStatus() {
       }
 
       // 更新进程统计信息
-      if (processStatsData && processStatsData.process_stats && !processStatsData.error) {
-        processStats.value = processStatsData.process_stats
+      if (statusData.process_stats && !statusData.error) {
+        processStats.value = statusData.process_stats
       } else {
         processStats.value = null
       }
@@ -556,6 +574,18 @@ function getMemoryColor(memoryPercent) {
   if (memoryPercent > 80) return 'error'
   if (memoryPercent > 60) return 'warning'
   return 'success'
+}
+
+// 获取服务器类型显示文本
+function getServerTypeText(serverType) {
+  switch (serverType) {
+    case 'sse':
+      return 'SSE'
+    case 'streamable':
+      return 'HTTP'
+    default:
+      return '未知'
+  }
 }
 
 

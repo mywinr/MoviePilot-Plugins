@@ -65,7 +65,40 @@ MCP Server 提供了多种工具，可以通过大语言模型调用：
 
 目前仅在Cherry Studio上测试过：
 
+##### Streamable HTTP
+
+MCP Server插件中选择服务器类型为`HTTP Streamable`，然后在Cherry Studio中配置如下：
+
 ![Cherry Studio配置示例](./assets/cherry_studio.png)
+
+JSON格式配置如下：
+
+```json
+ "moviepilot": {
+      "url": "https://host:port/mcp/",
+      "headers": {
+          "Authorization": "Bearer access_token",
+          "Content-Type": "application/json"
+      }
+  }
+```
+
+##### Server-Sent Events (SSE)
+
+MCP Server插件中选择服务器类型为`Server-Sent Events (SSE)`，然后在Cherry Studio中配置如下：
+
+![Cherry Studio配置示例](./assets/cherry_studio_sse.png)
+
+JSON格式配置如下：
+
+```json
+ "moviepilot_sse": {
+      "url": "https://host:port/sse/",
+      "headers": {
+          "Authorization": "Bearer access_token",
+      }
+  }
+
 
 其中{host}是Movie Pilot的外网访问域名，{port}是监听端口，可在配置也配置。
 {access_token}是MCP Server的认证令牌，可在配置页面获取。

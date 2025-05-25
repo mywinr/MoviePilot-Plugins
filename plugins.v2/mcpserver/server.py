@@ -12,9 +12,10 @@ import mcp.types as types
 from mcp.server.lowlevel import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from starlette.applications import Starlette
-from starlette.routing import Mount
+from starlette.routing import Mount, Route
 from starlette.types import Receive, Scope, Send
 from starlette.middleware import Middleware
+from starlette.responses import JSONResponse
 
 
 # 设置详细的异常处理
@@ -222,6 +223,11 @@ def main(
     ) -> None:
         await session_manager.handle_request(scope, receive, send)
 
+    # 健康检查端点
+    async def health_check(request):
+        """健康检查端点"""
+        return JSONResponse({"status": "healthy", "server": "mcp-http"})
+
     @contextlib.asynccontextmanager
     async def lifespan(_: Starlette) -> AsyncIterator[None]:
         """Context manager for managing session manager lifecycle."""
@@ -265,6 +271,7 @@ def main(
     # 创建路由
     routes = [
         Mount("/mcp", app=handle_streamable_http),
+        Route("/health", endpoint=health_check),
     ]
 
     # Create an ASGI application using the transport
