@@ -156,7 +156,7 @@ async def run_server(
         return await prompt_manager.get_prompt(name, arguments)
 
     # 创建SSE传输
-    sse_transport = SseServerTransport("/messages/")
+    sse_transport = SseServerTransport("/sse/messages/")
 
     # SSE连接处理器 - 使用ASGI格式
     async def handle_sse(scope, receive, send):
@@ -173,15 +173,7 @@ async def run_server(
             logger.error(traceback.format_exc())
             raise
 
-    # 消息处理器 - 这个需要保持ASGI格式，因为使用Mount
-    async def handle_messages(scope, receive, send):
-        """处理POST消息"""
-        try:
-            await sse_transport.handle_post_message(scope, receive, send)
-        except Exception as e:
-            logger.error(f"消息处理失败: {str(e)}")
-            logger.error(traceback.format_exc())
-            raise
+
 
     # 健康检查端点
     async def health_check(request):
@@ -211,26 +203,35 @@ async def run_server(
         Middleware(BearerAuthMiddleware, token_manager=token_manager)
     ]
 
-    # SSE端点处理器 - 使用ASGI格式
+    # SSE端点处理器 - 使用ASGI格式，处理SSE连接和POST消息
     async def sse_endpoint(scope, receive, send):
-        """SSE端点处理器"""
+        """SSE端点处理器 - 处理SSE连接和POST消息"""
         try:
-            # 直接调用SSE传输的connect_sse方法
-            async with sse_transport.connect_sse(scope, receive, send) as streams:
-                await app.run(
-                    streams[0],
-                    streams[1],
-                    app.create_initialization_options()
-                )
+            # 检查请求路径和方法
+            path = scope.get("path", "")
+            method = scope.get("method", "GET")
+
+            logger.info(f"SSE端点收到请求: {method} {path}")
+
+            # 如果是POST请求到messages端点，处理消息
+            if method == "POST" and path.endswith("/messages/"):
+                await sse_transport.handle_post_message(scope, receive, send)
+            else:
+                # 否则处理SSE连接
+                async with sse_transport.connect_sse(scope, receive, send) as streams:
+                    await app.run(
+                        streams[0],
+                        streams[1],
+                        app.create_initialization_options()
+                    )
         except Exception as e:
-            logger.error(f"SSE连接处理失败: {str(e)}")
+            logger.error(f"SSE端点处理失败: {str(e)}")
             logger.error(traceback.format_exc())
             raise
 
     # 创建路由
     routes = [
-        Mount("/sse", app=sse_endpoint),  # SSE端点使用Mount
-        Mount("/messages", app=handle_messages),  # 消息处理使用Mount
+        Mount("/sse", app=sse_endpoint),  # SSE端点使用Mount，处理 /sse/ 和 /sse/messages/
         Route("/health", endpoint=health_check),
     ]
 

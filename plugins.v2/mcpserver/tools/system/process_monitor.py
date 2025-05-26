@@ -220,10 +220,17 @@ class ProcessMonitorTool(BaseTool):
                 except (psutil.AccessDenied, AttributeError):
                     num_fds = 0
 
-                # 网络连接
+                # 网络连接 - 兼容不同版本的psutil
                 try:
                     connections = []
-                    for conn in proc.connections():
+                    # 尝试使用新版本的方法
+                    try:
+                        proc_connections = proc.net_connections()
+                    except AttributeError:
+                        # 如果不存在，使用旧版本的方法
+                        proc_connections = proc.connections()
+
+                    for conn in proc_connections:
                         connections.append({
                             'laddr': f"{conn.laddr.ip}:{conn.laddr.port}" if conn.laddr else "",
                             'raddr': f"{conn.raddr.ip}:{conn.raddr.port}" if conn.raddr else "",

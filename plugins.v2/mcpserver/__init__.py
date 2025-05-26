@@ -12,6 +12,8 @@ import json
 from enum import Enum
 from typing import List, Tuple, Dict, Any, Optional
 from pathlib import Path
+import psutil
+from app.utils.singleton import SingletonClass
 
 from app.log import logger
 from app.plugins import _PluginBase
@@ -23,7 +25,7 @@ from app.helper.directory import DirectoryHelper
 def generate_token(length=32):
     """生成指定长度的随机安全token"""
     alphabet = string.ascii_letters + string.digits
-    return ''.join(secrets.choice(alphabet) for _ in range(length))
+    return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
 class ServerState(Enum):
@@ -36,30 +38,14 @@ class ServerState(Enum):
 
 
 class ProcessManager:
-    """进程管理器 - 统一管理MCP服务器进程的生命周期"""
+    """进程管理器 - 管理MCP服务器进程的生命周期"""
 
-    # 细粒度锁设计，避免死锁
-    _instance_lock = threading.Lock()  # 仅用于单例创建
-    _monitor_lock = threading.Lock()   # 仅用于监控线程管理
-    _global_instance = None
+    # 全局监控线程管理
+    _monitor_lock = threading.Lock()
     _global_monitor_active = False
 
-    def __new__(cls, plugin_instance):
-        """确保只有一个ProcessManager实例"""
-        with cls._instance_lock:
-            if cls._global_instance is None:
-                logger.info("创建全局唯一的ProcessManager实例")
-                cls._global_instance = super().__new__(cls)
-                cls._global_instance._initialized = False
-            else:
-                logger.info("返回现有的ProcessManager实例")
-            return cls._global_instance
-
     def __init__(self, plugin_instance):
-        if hasattr(self, '_initialized') and self._initialized:
-            self.plugin = plugin_instance
-            return
-
+        """初始化ProcessManager，清理可能存在的冲突进程"""
         self.plugin = plugin_instance
         self.state = ServerState.STOPPED
         self.process = None
@@ -68,8 +54,127 @@ class ProcessManager:
         self._state_lock = threading.Lock()
         self._operation_lock = threading.Lock()
         self._restart_lock = threading.Lock()
-        self._initialized = True
-        logger.info("ProcessManager实例初始化完成")
+
+        # 在初始化时清理可能存在的其他MCP服务器进程
+        self._cleanup_existing_servers()
+
+        logger.info(f"ProcessManager实例初始化完成，管理插件: {id(self.plugin)}")
+
+    def _cleanup_existing_servers(self):
+        """清理可能存在的其他MCP服务器进程"""
+        try:
+            port = self.plugin._config.get("port", 3111)
+            host = self.plugin._config.get("host", "0.0.0.0")
+
+            logger.info(f"检查并清理端口 {port} 上可能存在的MCP服务器进程")
+
+            # 查找并终止占用目标端口的MCP服务器进程
+            terminated_processes = self._find_and_terminate_mcp_processes(port, host)
+
+            if terminated_processes:
+                logger.info(f"已清理 {len(terminated_processes)} 个冲突的MCP服务器进程")
+                # 等待进程完全终止和端口释放
+                time.sleep(2)
+            else:
+                logger.debug(f"端口 {port} 上没有发现冲突的MCP服务器进程")
+
+        except Exception as e:
+            logger.warning(f"清理现有服务器进程时出错: {str(e)}")
+
+    def _find_and_terminate_mcp_processes(self, port: int, host: str) -> list:
+        """查找并终止占用指定端口的MCP服务器进程"""
+        terminated_processes = []
+
+        try:
+            for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+                try:
+                    # 检查进程的网络连接 - 兼容不同版本的psutil
+                    try:
+                        # 尝试使用新版本的方法
+                        connections = proc.net_connections(kind="inet")
+                    except AttributeError:
+                        # 如果不存在，使用旧版本的方法
+                        connections = proc.connections(kind="inet")
+
+                    for conn in connections:
+                        is_target_port = conn.laddr.port == port
+                        is_bind_addr = (
+                            conn.laddr.ip == host
+                            or conn.laddr.ip == "0.0.0.0"
+                            or conn.laddr.ip == "::"
+                        )
+
+                        if is_target_port and is_bind_addr:
+                            pid = proc.pid
+                            cmd_line = " ".join(
+                                proc.cmdline() if proc.cmdline() else []
+                            )
+
+                            # 检查是否是MCP服务器进程
+                            is_python = "python" in cmd_line.lower()
+                            is_mcp_server = (
+                                "server.py" in cmd_line
+                                or "sse_server.py" in cmd_line
+                                or "mcpserver" in cmd_line.lower()
+                            )
+
+                            if is_python and is_mcp_server:
+                                logger.info(
+                                    f"发现MCP服务器进程 PID: {pid}, 命令: {cmd_line}"
+                                )
+                                if self._terminate_single_process(proc):
+                                    terminated_processes.append(pid)
+                            else:
+                                logger.debug(
+                                    f"端口 {port} 被非MCP服务器进程占用: {cmd_line}"
+                                )
+
+                except (
+                    psutil.NoSuchProcess,
+                    psutil.AccessDenied,
+                    psutil.ZombieProcess,
+                ):
+                    continue
+
+        except ImportError:
+            logger.warning("psutil模块未安装，无法检查冲突进程")
+        except Exception as e:
+            logger.error(f"查找MCP服务器进程时出错: {str(e)}")
+
+        return terminated_processes
+
+    def _terminate_single_process(self, proc) -> bool:
+        """终止单个进程"""
+        try:
+            pid = proc.pid
+            logger.info(f"正在终止MCP服务器进程 PID: {pid}")
+
+            # 先尝试优雅终止
+            proc.terminate()
+
+            # 等待进程终止
+            try:
+                proc.wait(timeout=3)
+                logger.info(f"进程 {pid} 已优雅终止")
+                return True
+            except psutil.TimeoutExpired:
+                # 如果优雅终止失败，强制终止
+                logger.warning(f"进程 {pid} 未响应终止信号，强制终止")
+                proc.kill()
+                try:
+                    proc.wait(timeout=2)
+                    logger.info(f"进程 {pid} 已强制终止")
+                    return True
+                except psutil.TimeoutExpired:
+                    logger.error(f"无法终止进程 {pid}")
+                    return False
+
+        except psutil.NoSuchProcess:
+            logger.info(f"进程已不存在")
+            return True
+        except Exception as e:
+            logger.error(f"终止进程失败: {str(e)}")
+            return False
 
     def get_state(self) -> ServerState:
         with self._state_lock:
@@ -84,39 +189,35 @@ class ProcessManager:
 
     def is_running(self) -> bool:
         """检查进程是否正在运行，使用PID检测和健康检查双重验证"""
-        return self._robust_process_check()
-
-    def _robust_process_check(self) -> bool:
-        """健壮的进程状态检测 - 基于PID存在性和健康检查"""
         if self.process is None:
             return False
-
         try:
             pid_exists = False
             try:
-                import psutil
-                if hasattr(self.process, 'pid') and self.process.pid:
+                if hasattr(self.process, "pid") and self.process.pid:
                     proc = psutil.Process(self.process.pid)
-                    pid_exists = proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE
+                    pid_exists = (
+                        proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE
+                    )
             except (ImportError, psutil.NoSuchProcess, psutil.AccessDenied):
                 pid_exists = False
 
-            health_ok = False
             if pid_exists:
-                health_ok = self._health_check()
-
-            if pid_exists and health_ok:
-                logger.debug("进程检查: PID存在且健康检查通过 -> running")
-                if self.get_state() != ServerState.RUNNING:
-                    self._set_state(ServerState.RUNNING)
-                return True
-            elif pid_exists and not health_ok:
-                logger.debug("进程检查: PID存在但健康检查失败 -> error")
-                if self.get_state() != ServerState.ERROR:
-                    self._set_state(ServerState.ERROR)
-                return False
+                if self._health_check():
+                    if self.get_state() != ServerState.RUNNING:
+                        self._set_state(ServerState.RUNNING)
+                    return True
+                else:
+                    logger.debug(
+                        f"进程检查: PID {self.process.pid} 存在但健康检查失败 -> error"
+                    )
+                    if self.get_state() != ServerState.ERROR:
+                        self._set_state(ServerState.ERROR)
+                    return False
             else:
-                logger.debug("进程检查: PID不存在 -> stop")
+                logger.debug(
+                    f"进程检查: PID {self.process.pid} 不存在 -> stop"
+                )
                 if self.get_state() != ServerState.STOPPED:
                     self._set_state(ServerState.STOPPED)
                 return False
@@ -143,6 +244,8 @@ class ProcessManager:
 
                 if self._start_process():
                     self._set_state(ServerState.RUNNING)
+                    # 延迟5秒等待服务进程完全启动
+                    time.sleep(5)
                     self._start_monitor()
                     logger.info("服务器启动成功")
                     return True
@@ -158,14 +261,12 @@ class ProcessManager:
 
     def stop_server(self) -> bool:
         """停止服务器"""
-        if self.get_state() == ServerState.STOPPED:
-            logger.info("服务器已停止")
-            return True
-
         self._set_state(ServerState.STOPPING)
-
         try:
             self._stop_monitor()
+            if self.get_state() == ServerState.STOPPED:
+                logger.info("服务器处于停止状态，跳过...")
+                return True
             self._stop_process()
             self._set_state(ServerState.STOPPED)
             return True
@@ -220,7 +321,7 @@ class ProcessManager:
 
             if self.process and self.process.poll() is None:
                 logger.info("停止现有进程...")
-                self._stop_process()
+                self.stop_server()
                 time.sleep(1)
 
         except Exception as e:
@@ -235,10 +336,7 @@ class ProcessManager:
 
             logger.info(f"启动命令: {' '.join(cmd)}")
 
-            self.process = subprocess.Popen(
-                cmd,
-                cwd=str(self.plugin._plugin_dir)
-            )
+            self.process = subprocess.Popen(cmd, cwd=str(self.plugin._plugin_dir))
 
             if self.process is None:
                 raise RuntimeError("进程启动失败")
@@ -247,11 +345,12 @@ class ProcessManager:
 
             if self._wait_for_startup():
                 logger.info(
-                    f"MCP服务器已成功启动 - {self.plugin._config['host']}:{self.plugin._config['port']}")
+                    f"MCP服务器已成功启动 - {self.plugin._config['host']}:{self.plugin._config['port']}"
+                )
                 return True
             else:
                 logger.error("服务器启动失败或健康检查未通过")
-                self._stop_process()
+                self.stop_server()
                 return False
 
         except Exception as e:
@@ -287,32 +386,33 @@ class ProcessManager:
             if not auth_token:
                 auth_token = generate_token(32)
                 self.plugin._config["auth_token"] = auth_token
-                self.plugin.update_config({
-                    "enable": self.plugin._enable,
-                    "config": self.plugin._config
-                })
+                self.plugin.update_config({"config": self.plugin._config})
                 logger.info("已生成新的API认证token")
 
             access_token = self.plugin._config.get("access_token", "")
 
-            log_file_path = str(Path(settings.LOG_PATH) /
-                                "plugins" / "mcpserver.log")
+            log_file_path = str(
+                Path(settings.LOG_PATH) / "plugins" / "mcpserver.log"
+            )
 
             cmd = [
                 str(self.plugin._python_bin),
                 str(script_path),
-                "--host", self.plugin._config["host"],
-                "--port", str(self.plugin._config["port"]),
-                "--log-level", self.plugin._config["log_level"],
-                "--log-file", log_file_path,
-                "--moviepilot-port", str(settings.PORT)
+                "--host",
+                self.plugin._config["host"],
+                "--port",
+                str(self.plugin._config["port"]),
+                "--log-level",
+                self.plugin._config["log_level"],
+                "--log-file",
+                log_file_path,
+                "--moviepilot-port",
+                str(settings.PORT),
+                "--auth-token",
+                auth_token,
+                "--access-token",
+                access_token,
             ]
-
-            if auth_token:
-                cmd.extend(["--auth-token", auth_token])
-
-            if access_token:
-                cmd.extend(["--access-token", access_token])
 
             return cmd
 
@@ -329,13 +429,7 @@ class ProcessManager:
         logger.info(f"等待服务器启动，最长等待{max_time}秒")
 
         while time.time() - start_time < max_time:
-            if self.process is None or self.process.poll() is not None:
-                if self.process:
-                    exitcode = self.process.poll()
-                    logger.error(f"服务器进程已退出，返回码: {exitcode}")
-                return False
-
-            if self._health_check():
+            if self.is_running():
                 return True
 
             time.sleep(interval)
@@ -346,10 +440,11 @@ class ProcessManager:
     def _health_check(self) -> bool:
         """向服务器发送健康检查请求"""
         try:
-            response = requests.get(self.plugin._health_check_url, timeout=2)
+            response = requests.get(self.plugin._health_check_url, timeout=5)
             return response.status_code == 200
 
-        except requests.RequestException:
+        except Exception as e:
+            logger.debug(f"健康检查请求失败: {e}")
             return False
 
     def _stop_process(self):
@@ -395,6 +490,7 @@ class ProcessManager:
                     logger.error(f"强制终止进程失败: {str(e)}")
 
             self.process = None
+            self._set_state(ServerState.STOPPED)
             logger.info("进程已停止")
 
         except Exception as e:
@@ -416,8 +512,7 @@ class ProcessManager:
 
             self.monitor_stop_event = threading.Event()
             self.monitor_thread = threading.Thread(
-                target=self._monitor_loop,
-                daemon=True
+                target=self._monitor_loop, daemon=True
             )
             self.monitor_thread.start()
             ProcessManager._global_monitor_active = True
@@ -445,6 +540,7 @@ class ProcessManager:
 
         self.monitor_thread = None
         self.monitor_stop_event = None
+        logger.info("进程监控线程已停止")
 
     def _monitor_loop(self):
         """监控循环，检测进程状态并自动重启意外终止的服务器"""
@@ -466,33 +562,24 @@ class ProcessManager:
                         if self.monitor_stop_event.wait(2):
                             break
                         continue
-
-                    process_running = self._robust_process_check()
+                    process_running = self.is_running()
 
                     if not process_running:
                         if self.monitor_stop_event.is_set():
                             break
 
                         exitcode = self.process.poll() if self.process else "unknown"
-                        logger.warning(f"服务器进程意外终止，返回码: {exitcode}")
 
-                        if exitcode == 1:
-                            logger.error("服务器启动失败（返回码1），可能是配置或依赖问题，暂停监控60秒")
-                            self._set_state(ServerState.ERROR)
-                            break
+                        if exitcode is None:
+                            logger.error("服务器进程未响应，可能是启动失败，即将重启")
+                            self.stop_server()
+                        else:
+                            logger.warning(f"服务器进程意外终止，返回码: {exitcode}")
+                            self._set_state(ServerState.STOPPED)
 
-                        self._set_state(ServerState.STARTING)
                         restart_needed = True
                         delay = self.plugin._config.get("restart_delay", 5)
                         logger.info(f"将在{delay}秒后重启服务器")
-
-                # 在锁外处理等待和重启，避免长时间持锁
-                if current_state == ServerState.ERROR:
-                    # 错误状态下等待60秒
-                    if self.monitor_stop_event.wait(60):
-                        logger.info("监控线程在暂停期间收到停止信号，退出")
-                        break
-                    continue
 
                 # 在锁外等待和重启，避免长时间持有锁
                 if restart_needed:
@@ -501,31 +588,21 @@ class ProcessManager:
                         self._set_state(ServerState.STOPPED)
                         break
 
-                    # 再次检查插件状态和停止信号
-                    if not self.plugin._enable or self.monitor_stop_event.is_set():
-                        logger.info("插件已禁用或收到停止信号，取消重启")
-                        self._set_state(ServerState.STOPPED)
-                        break
-
                     # 重启服务器 - 使用操作锁而非全局锁
                     with self._operation_lock:
-                        # 再次检查状态，确保仍需要重启
-                        if self.get_state() == ServerState.STARTING:
-                            logger.info("正在重启MCP服务器...")
-                            if self._start_process():
-                                self._set_state(ServerState.RUNNING)
-                                logger.info("服务器重启成功")
-                            else:
-                                self._set_state(ServerState.ERROR)
-                                logger.error("服务器重启失败，暂停监控60秒")
-                                if self.monitor_stop_event.wait(60):
-                                    logger.info("监控线程在暂停期间收到停止信号，退出")
-                                    break
+                        logger.info("正在重启MCP服务器...")
+                        if self.start_server():
+                            logger.info("服务器重启成功")
+                        else:
+                            self._set_state(ServerState.ERROR)
+                            logger.error("服务器重启失败，暂停监控60秒")
+                            if self.monitor_stop_event.wait(60):
+                                logger.info("监控线程在暂停期间收到停止信号，退出")
+                                break
 
                 # 正常情况下每5秒检查一次
                 if self.monitor_stop_event.wait(5):
                     break
-
         except Exception as e:
             logger.error(f"监控线程发生异常: {str(e)}")
             logger.error(traceback.format_exc())
@@ -536,13 +613,11 @@ class ProcessManager:
             logger.info("进程监控线程已结束")
 
 
-class MCPServer(_PluginBase):
+class MCPServer(_PluginBase, metaclass=SingletonClass):
     plugin_name = "MCP Server"
     plugin_desc = "使用MCP客户端通过大模型来操作MoviePilot"
-    plugin_icon = (
-        "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/mcp.png"
-    )
-    plugin_version = "1.6"
+    plugin_icon = "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/mcp.png"
+    plugin_version = "1.7"
     plugin_author = "DzAvril"
     author_url = "https://github.com/DzAvril"
     plugin_config_prefix = "mcpserver_"
@@ -562,6 +637,8 @@ class MCPServer(_PluginBase):
         "auto_restart": True,
         "restart_delay": 5,
         "auth_token": "",
+        "mp_username": "admin",
+        "mp_password": "",
     }
 
     _venv_path = None
@@ -575,37 +652,38 @@ class MCPServer(_PluginBase):
         """初始化MCPServer类，创建ProcessManager实例和设置基本路径"""
         super().__init__()
 
+        logger.info(f"正在初始化MCPServer实例: {id(self)}")
+
         self._plugin_dir = Path(__file__).parent.absolute()
         self._venv_path = self._plugin_dir / self._config["venv_dir"]
         self._python_bin = self._venv_path / "bin" / "python"
 
+        # 创建ProcessManager实例，它会自动清理冲突的进程
         self._process_manager = ProcessManager(self)
-        logger.info("MCPServer插件已初始化")
+        logger.info(
+            f"MCPServer插件已初始化，实例ID: {id(self)}, ProcessManager ID: {id(self._process_manager)}"
+        )
 
     def init_plugin(self, config: dict = None):
         """初始化插件，检测配置变化并处理服务器状态"""
         if not config:
             return
-
         previous_enable = self._enable
+        enable_changed = previous_enable != config.get("enable", False)
+        self._enable = config.get("enable", False)
+
         previous_server_type = self._config.get("server_type", "streamable")
-
-        self._enable = config.get('enable', False)
-        self._config.update(config.get('config', {}))
-
-        current_enable = self._enable
+        # update _config from config
+        self._config.update(config.get("config", {}))
+        
         current_server_type = self._config.get("server_type", "streamable")
-
-        enable_changed = previous_enable != current_enable
         server_type_changed = previous_server_type != current_server_type
 
         if enable_changed or server_type_changed:
-            logger.info(f"配置变化: enable={previous_enable}->{current_enable}, "
-                        f"server_type={previous_server_type}->{current_server_type}")
-
-        self._plugin_dir = Path(__file__).parent.absolute()
-        self._venv_path = self._plugin_dir / self._config["venv_dir"]
-        self._python_bin = self._venv_path / "bin" / "python"
+            logger.info(
+                f"配置变化: enable={previous_enable}->{self._enable}, "
+                f"server_type={previous_server_type}->{current_server_type}"
+            )
 
         if current_server_type == "sse":
             self._server_script_path = self._plugin_dir / "sse_server.py"
@@ -619,60 +697,31 @@ class MCPServer(_PluginBase):
             logger.warning("ProcessManager不存在，重新创建")
             self._process_manager = ProcessManager(self)
 
-        self._handle_server_operations(enable_changed, server_type_changed,
-                                       current_enable)
+        self._handle_server_operations(
+            enable_changed, server_type_changed
+        )
 
-    def _should_skip_server_operations(self, enable_changed: bool,
-                                       server_type_changed: bool) -> bool:
-        """检查是否应该跳过服务器操作，避免与_save_config重复"""
-        # 使用时间戳来检测是否是短时间内的重复调用
-        import time
-        current_time = time.time()
-
-        # 如果没有配置变化，不需要跳过
-        if not enable_changed and not server_type_changed:
-            return False
-
-        # 检查是否在短时间内（5秒）有相同的配置变化
-        if hasattr(self, '_last_config_change_time'):
-            time_diff = current_time - self._last_config_change_time
-            if time_diff < 5:  # 5秒内的重复调用
-                logger.info(f"检测到{time_diff:.1f}秒内的重复配置变化，跳过服务器操作")
-                return True
-
-        # 记录本次配置变化时间
-        self._last_config_change_time = current_time
-        return False
-
-    def _handle_server_operations(self, enable_changed: bool,
-                                  server_type_changed: bool, current_enable: bool):
+    def _handle_server_operations(
+        self, enable_changed: bool, server_type_changed: bool
+    ):
         """根据配置变化处理服务器启动、停止、重启操作"""
 
         if server_type_changed:
             logger.info("检测到服务器类型变化，需要重启服务器")
-            if current_enable:
+            if self._enable:
                 self._process_manager.restart_server()
             else:
                 self._process_manager.stop_server()
             return
 
         if enable_changed:
-            if current_enable:
+            if self._enable:
                 logger.info("插件从禁用变为启用，启动服务器...")
                 self._process_manager.start_server()
             else:
                 logger.info("插件从启用变为禁用，停止服务器...")
                 self._process_manager.stop_server()
             return
-
-        if not current_enable and self._process_manager.is_running():
-            logger.info("插件已禁用但服务器仍在运行，正在停止服务器...")
-            self._process_manager.stop_server()
-            return
-
-        if current_enable and not self._process_manager.is_running():
-            logger.info("插件已启用但服务器未运行，正在自动启动服务器...")
-            self._process_manager.start_server()
 
     def _ensure_venv(self) -> bool:
         """确保虚拟环境存在并安装了所需依赖"""
@@ -682,7 +731,9 @@ class MCPServer(_PluginBase):
                 venv.create(self._venv_path, with_pip=True)
 
                 if not self._python_bin.exists():
-                    logger.error(f"创建虚拟环境失败，找不到Python解释器: {self._python_bin}")
+                    logger.error(
+                        f"创建虚拟环境失败，找不到Python解释器: {self._python_bin}"
+                    )
                     return False
 
                 logger.info("虚拟环境创建成功")
@@ -713,7 +764,8 @@ class MCPServer(_PluginBase):
                 "pip",
                 "install",
                 "--upgrade",
-                "-i", "https://mirrors.aliyun.com/pypi/simple/"
+                "-i",
+                "https://mirrors.aliyun.com/pypi/simple/",
             ]
 
             # 添加依赖
@@ -724,10 +776,7 @@ class MCPServer(_PluginBase):
 
             # 执行安装
             result = subprocess.run(
-                install_cmd,
-                cwd=str(self._plugin_dir),
-                capture_output=True,
-                text=True
+                install_cmd, cwd=str(self._plugin_dir), capture_output=True, text=True
             )
 
             if result.returncode != 0:
@@ -742,30 +791,6 @@ class MCPServer(_PluginBase):
             logger.error(traceback.format_exc())
             return False
 
-    def _stop_all_threads(self):
-        """停止所有线程"""
-        logger.info("正在停止所有监控线程...")
-
-        # 停止ProcessManager的监控线程
-        if self._process_manager:
-            self._process_manager._stop_monitor()
-
-        # 强制清理所有线程引用
-        if hasattr(self, '_monitor_thread') and self._monitor_thread:
-            if self._monitor_thread.is_alive():
-                logger.warning("监控线程仍在运行，强制清理")
-            self._monitor_thread = None
-
-        if hasattr(self, '_monitor_stop_event') and self._monitor_stop_event:
-            self._monitor_stop_event.set()
-            self._monitor_stop_event = None
-
-        # 等待一段时间确保线程完全停止
-        import time
-        time.sleep(2)
-
-        logger.info("所有监控线程已停止")
-
     def _check_and_clear_port(self):
         """检查端口是否被占用，如果被占用则尝试停止占用进程"""
         port = int(self._config["port"])
@@ -774,8 +799,7 @@ class MCPServer(_PluginBase):
         # 判断地址类型：IPv4 or IPv6
         try:
             # getaddrinfo 自动判断协议族
-            addr_info = socket.getaddrinfo(
-                host, port, proto=socket.IPPROTO_TCP)
+            addr_info = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
         except socket.gaierror as e:
             logger.error(f"地址解析失败: {host}, error: {e}")
             return
@@ -816,7 +840,9 @@ class MCPServer(_PluginBase):
             # 如果无法释放端口，报告错误
             self._report_port_occupied(port)
 
-            raise RuntimeError(f"端口 {port} 被占用且无法清理，请手动终止占用进程或修改端口配置")
+            raise RuntimeError(
+                f"端口 {port} 被占用且无法清理，请手动终止占用进程或修改端口配置"
+            )
 
         except Exception as e:
             logger.error(f"检查和清理端口时出错: {str(e)}")
@@ -833,9 +859,7 @@ class MCPServer(_PluginBase):
 
         # 提供进一步诊断信息
         try:
-            # 尝试导入psutil提供更多信息
-            import psutil
-            for conn in psutil.net_connections(kind='inet'):
+            for conn in psutil.net_connections(kind="inet"):
                 if conn.laddr.port == port:
                     if conn.pid:
                         try:
@@ -860,32 +884,49 @@ class MCPServer(_PluginBase):
         host = self._config["host"]
 
         try:
-            import psutil
-
-            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            for proc in psutil.process_iter(["pid", "name", "cmdline"]):
                 try:
-                    for conn in proc.connections(kind='inet'):
+                    # 检查进程的网络连接 - 兼容不同版本的psutil
+                    try:
+                        # 尝试使用新版本的方法
+                        connections = proc.net_connections(kind="inet")
+                    except AttributeError:
+                        # 如果不存在，使用旧版本的方法
+                        connections = proc.connections(kind="inet")
+
+                    for conn in connections:
                         is_target_port = conn.laddr.port == port
-                        is_bind_addr = (conn.laddr.ip == host or
-                                        conn.laddr.ip == '0.0.0.0' or
-                                        conn.laddr.ip == '::')
+                        is_bind_addr = (
+                            conn.laddr.ip == host
+                            or conn.laddr.ip == "0.0.0.0"
+                            or conn.laddr.ip == "::"
+                        )
 
                         if is_target_port and is_bind_addr:
                             pid = proc.pid
                             cmd_line = " ".join(
                                 proc.cmdline() if proc.cmdline() else []
                             )
-                            logger.info(f"找到占用端口 {port} 的进程 PID: {pid}, 命令: {cmd_line}")
+                            logger.info(
+                                f"找到占用端口 {port} 的进程 PID: {pid}, 命令: {cmd_line}"
+                            )
 
                             is_python = "python" in cmd_line.lower()
                             is_server = (
-                                "server.py" in cmd_line or "sse_server.py" in cmd_line)
+                                "server.py" in cmd_line or "sse_server.py" in cmd_line
+                            )
 
                             if is_python and is_server:
                                 return self._terminate_process(proc)
                             else:
-                                logger.warning("占用端口的不是MCP服务器进程，不自动终止")
-                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                                logger.warning(
+                                    "占用端口的不是MCP服务器进程，不自动终止"
+                                )
+                except (
+                    psutil.NoSuchProcess,
+                    psutil.AccessDenied,
+                    psutil.ZombieProcess,
+                ):
                     continue
 
             logger.warning(f"未找到占用端口 {port} 的MCP服务器进程")
@@ -901,8 +942,6 @@ class MCPServer(_PluginBase):
     def _terminate_process(self, proc) -> bool:
         """终止指定进程"""
         try:
-            import psutil
-
             logger.info("确认是MCP服务器进程，尝试终止")
             proc.terminate()
             _, alive = psutil.wait_procs([proc], timeout=3)
@@ -933,10 +972,6 @@ class MCPServer(_PluginBase):
         logger.error("等待端口释放超时")
         return False
 
-
-
-
-
     def _get_server_status(self) -> Dict[str, Any]:
         """获取服务器详细状态"""
         # 获取当前服务器类型和相关信息
@@ -957,7 +992,7 @@ class MCPServer(_PluginBase):
             "auth_token": self._mask_token(self._config.get("auth_token", "")),
             "requires_auth": True,
             "resource_usage": None,
-            "state": "unknown"
+            "state": "unknown",
         }
 
         # 设置服务URL
@@ -981,8 +1016,7 @@ class MCPServer(_PluginBase):
                     logger.warning("健康检查失败")
 
                 try:
-                    resource_usage = self._get_process_resource_usage(
-                        status["pid"])
+                    resource_usage = self._get_process_resource_usage(status["pid"])
                     status["resource_usage"] = resource_usage
                 except Exception as e:
                     logger.debug(f"获取进程资源占用信息失败: {str(e)}")
@@ -1001,8 +1035,6 @@ class MCPServer(_PluginBase):
     def _get_process_resource_usage(self, pid: int) -> Optional[Dict[str, Any]]:
         """获取指定进程的资源占用信息"""
         try:
-            import psutil
-
             proc = psutil.Process(pid)
 
             # 获取进程信息
@@ -1015,7 +1047,7 @@ class MCPServer(_PluginBase):
                 # 线程和文件描述符
                 num_threads = proc.num_threads()
                 try:
-                    num_fds = proc.num_fds() if hasattr(proc, 'num_fds') else 0
+                    num_fds = proc.num_fds() if hasattr(proc, "num_fds") else 0
                 except (psutil.AccessDenied, AttributeError):
                     num_fds = 0
 
@@ -1030,12 +1062,12 @@ class MCPServer(_PluginBase):
                     runtime = f"{runtime_hours / 24:.1f} 天"
 
                 return {
-                    'cpu_percent': cpu_percent,
-                    'memory_mb': memory_info.rss / 1024 / 1024,  # 物理内存 MB
-                    'memory_percent': memory_percent,
-                    'runtime': runtime,
-                    'num_threads': num_threads,
-                    'num_fds': num_fds
+                    "cpu_percent": cpu_percent,
+                    "memory_mb": memory_info.rss / 1024 / 1024,  # 物理内存 MB
+                    "memory_percent": memory_percent,
+                    "runtime": runtime,
+                    "num_threads": num_threads,
+                    "num_fds": num_fds,
                 }
 
         except ImportError:
@@ -1067,10 +1099,7 @@ class MCPServer(_PluginBase):
             self._config["auth_token"] = new_token
 
             # 保存配置
-            self.update_config({
-                "enable": self._enable,
-                "config": self._config
-            })
+            self.update_config({"config": self._config})
 
             # 检查服务器是否正在运行，如果在运行需要提示用户重启
             if self._process_manager and self._process_manager.is_running():
@@ -1085,14 +1114,11 @@ class MCPServer(_PluginBase):
                 "message": message,
                 "status": "success",
                 "token": new_token,
-                "masked_token": self._mask_token(new_token)
+                "masked_token": self._mask_token(new_token),
             }
         except Exception as e:
             logger.error(f"生成新token失败: {str(e)}")
-            return {
-                "message": f"生成新token失败: {str(e)}",
-                "status": "error"
-            }
+            return {"message": f"生成新token失败: {str(e)}", "status": "error"}
 
     def get_state(self) -> bool:
         """获取插件状态"""
@@ -1104,7 +1130,7 @@ class MCPServer(_PluginBase):
         return {
             "enable": self._enable,
             "config": self._config,
-            "server_status": self._get_server_status()
+            "server_status": self._get_server_status(),
         }
 
     def _save_config(self, config_payload: dict) -> Dict[str, Any]:
@@ -1115,43 +1141,25 @@ class MCPServer(_PluginBase):
             if not isinstance(config_payload, dict):
                 raise ValueError("配置数据必须是字典格式")
 
-            # 检测配置变化（但不更新内部状态）
-            previous_enable = self._enable
-            previous_server_type = self._config.get("server_type", "streamable")
+            # 获取配置
+            enable = config_payload.get("enable", False)
+            config = config_payload.get("config", {})
 
-            current_enable = config_payload.get('enable', False)
-            current_server_type = config_payload.get('config', {}).get("server_type", "streamable")
-
-            enable_changed = previous_enable != current_enable
-            server_type_changed = previous_server_type != current_server_type
-
-            logger.info(
-                f"配置变化检测: enable={previous_enable}->{current_enable}, server_type={previous_server_type}->{current_server_type}")
-
-            # 保存到系统配置
-            from app.db.systemconfig_oper import SystemConfigOper
-            system_config = SystemConfigOper()
-            config_key = f"plugin.{self.plugin_name.lower()}"
-            system_config.set(config_key, config_payload)
-
-            # 不在这里更新内部配置，让init_plugin来处理
-            # 这样可以确保init_plugin能正确检测到配置变化
-            logger.info("配置已保存，等待MoviePilot调用init_plugin处理服务器操作")
+            # 保存配置
+            self.update_config({"enable": enable, "config": config})
+            # self.init_plugin(self.get_config())
 
             return {
                 "message": "配置已保存",
                 "saved_config": self._get_config(),
-                "enable_changed": enable_changed,
-                "server_type_changed": server_type_changed
             }
 
         except Exception as e:
-            logger.error(f"{self.plugin_name}: 保存配置时发生错误: {e}",
-                         exc_info=True)
+            logger.error(f"{self.plugin_name}: 保存配置时发生错误: {e}", exc_info=True)
             return {
                 "message": f"保存配置失败: {e}",
                 "error": True,
-                "saved_config": self._get_config()
+                "saved_config": self._get_config(),
             }
 
     def _restart_server(self) -> Dict[str, Any]:
@@ -1167,15 +1175,12 @@ class MCPServer(_PluginBase):
                 # 获取最新状态
                 current_status = self._get_server_status()
 
-                return {
-                    "message": "服务器已成功重启",
-                    "server_status": current_status
-                }
+                return {"message": "服务器已成功重启", "server_status": current_status}
             else:
                 return {
                     "message": "服务器重启失败，请检查配置和日志",
                     "error": True,
-                    "server_status": self._get_server_status()
+                    "server_status": self._get_server_status(),
                 }
 
         except Exception as e:
@@ -1184,7 +1189,7 @@ class MCPServer(_PluginBase):
             return {
                 "message": f"重启服务器失败: {str(e)}",
                 "error": True,
-                "server_status": self._get_server_status()
+                "server_status": self._get_server_status(),
             }
 
     # --- Abstract/Base Methods Implementation ---
@@ -1204,64 +1209,64 @@ class MCPServer(_PluginBase):
                 "endpoint": self._get_config,
                 "methods": ["GET"],
                 "auth": "bear",
-                "summary": "获取当前配置"
+                "summary": "获取当前配置",
             },
             {
                 "path": "/config",
                 "endpoint": self._save_config,
                 "methods": ["POST"],
                 "auth": "bear",
-                "summary": "保存配置"
+                "summary": "保存配置",
             },
             {
                 "path": "/restart",
                 "endpoint": self._restart_server,
                 "methods": ["POST"],
                 "auth": "bear",
-                "summary": "重启服务器"
+                "summary": "重启服务器",
             },
             {
                 "path": "/start",
                 "endpoint": self._start_server_api,
                 "methods": ["POST"],
                 "auth": "bear",
-                "summary": "启动服务器"
+                "summary": "启动服务器",
             },
             {
                 "path": "/stop",
                 "endpoint": self._stop_server_api,
                 "methods": ["POST"],
                 "auth": "bear",
-                "summary": "停止服务器"
+                "summary": "停止服务器",
             },
             {
                 "path": "/token",
                 "endpoint": self._generate_new_token,
                 "methods": ["POST"],
                 "auth": "bear",
-                "summary": "生成新的API令牌"
+                "summary": "生成新的API令牌",
             },
             {
                 "path": "/status",
                 "endpoint": self._get_server_status_api,
                 "methods": ["GET"],
                 "auth": "bear",
-                "summary": "获取服务器状态"
+                "summary": "获取服务器状态",
             },
             {
                 "path": "/download_torrent",
                 "endpoint": self._download_torrent_api,
                 "methods": ["POST"],
                 "auth": "bear",
-                "summary": "下载种子"
+                "summary": "下载种子",
             },
             {
                 "path": "/process-stats",
                 "endpoint": self._get_process_stats_api,
                 "methods": ["GET"],
                 "auth": "bear",
-                "summary": "获取MCP服务器进程资源占用统计"
-            }
+                "summary": "获取MCP服务器进程资源占用统计",
+            },
         ]
 
     def _start_server_api(self) -> Dict[str, Any]:
@@ -1271,7 +1276,7 @@ class MCPServer(_PluginBase):
             if self._process_manager and self._process_manager.is_running():
                 return {
                     "message": "服务器已经在运行中",
-                    "server_status": self._get_server_status()
+                    "server_status": self._get_server_status(),
                 }
 
             # 启动服务器
@@ -1282,15 +1287,12 @@ class MCPServer(_PluginBase):
                 # 获取最新状态
                 current_status = self._get_server_status()
 
-                return {
-                    "message": "服务器已成功启动",
-                    "server_status": current_status
-                }
+                return {"message": "服务器已成功启动", "server_status": current_status}
             else:
                 return {
                     "message": "服务器启动失败，请检查配置和日志",
                     "error": True,
-                    "server_status": self._get_server_status()
+                    "server_status": self._get_server_status(),
                 }
 
         except Exception as e:
@@ -1299,7 +1301,7 @@ class MCPServer(_PluginBase):
             return {
                 "message": f"启动服务器失败: {str(e)}",
                 "error": True,
-                "server_status": self._get_server_status()
+                "server_status": self._get_server_status(),
             }
 
     def _stop_server_api(self) -> Dict[str, Any]:
@@ -1309,7 +1311,7 @@ class MCPServer(_PluginBase):
             if self._process_manager and not self._process_manager.is_running():
                 return {
                     "message": "服务器已经停止",
-                    "server_status": self._get_server_status()
+                    "server_status": self._get_server_status(),
                 }
 
             # 停止服务器
@@ -1320,15 +1322,12 @@ class MCPServer(_PluginBase):
                 # 获取最新状态
                 current_status = self._get_server_status()
 
-                return {
-                    "message": "服务器已成功停止",
-                    "server_status": current_status
-                }
+                return {"message": "服务器已成功停止", "server_status": current_status}
             else:
                 return {
                     "message": "服务器停止失败，请手动刷新状态",
                     "error": True,
-                    "server_status": self._get_server_status()
+                    "server_status": self._get_server_status(),
                 }
 
         except Exception as e:
@@ -1337,7 +1336,7 @@ class MCPServer(_PluginBase):
             return {
                 "message": f"停止服务器失败: {str(e)}",
                 "error": True,
-                "server_status": self._get_server_status()
+                "server_status": self._get_server_status(),
             }
 
     def _get_server_status_api(self) -> Dict[str, Any]:
@@ -1348,14 +1347,16 @@ class MCPServer(_PluginBase):
 
             # 记录日志
             logger.info(
-                "插件启动：%s, 获取服务器状态: running=%s, health=%s", self._enable,
-                status['running'], status['health']
+                "插件启动：%s, 获取服务器状态: running=%s, health=%s",
+                self._enable,
+                status["running"],
+                status["health"],
             )
 
             return {
                 "enable": self._enable,
                 "server_status": status,
-                "message": "获取服务器状态成功"
+                "message": "获取服务器状态成功",
             }
         except Exception as e:
             logger.error(f"获取服务器状态失败: {str(e)}")
@@ -1367,8 +1368,8 @@ class MCPServer(_PluginBase):
                     "running": False,
                     "health": False,
                     "pid": None,
-                    "url": None
-                }
+                    "url": None,
+                },
             }
 
     def _get_process_stats_api(self) -> Dict[str, Any]:
@@ -1376,7 +1377,8 @@ class MCPServer(_PluginBase):
         try:
             # 获取服务器状态，包含PID信息
             status = self._get_server_status()
-
+            logger.debug(f"获取服务器状态: {status}")
+            
             if not status["running"] or not status["pid"]:
                 return {
                     "message": "MCP服务器未运行或无法获取进程ID",
@@ -1389,8 +1391,6 @@ class MCPServer(_PluginBase):
 
             # 获取详细的进程资源统计
             try:
-                import psutil
-
                 proc = psutil.Process(pid)
 
                 # 获取进程信息
@@ -1408,13 +1408,18 @@ class MCPServer(_PluginBase):
                     # 线程和文件描述符
                     num_threads = proc.num_threads()
                     try:
-                        num_fds = proc.num_fds() if hasattr(proc, 'num_fds') else 0
+                        num_fds = proc.num_fds() if hasattr(proc, "num_fds") else 0
                     except (psutil.AccessDenied, AttributeError):
                         num_fds = 0
 
-                    # 网络连接
+                    # 网络连接 - 兼容不同版本的psutil
                     try:
-                        connections = len(proc.connections())
+                        # 尝试使用新版本的方法
+                        try:
+                            connections = len(proc.net_connections())
+                        except AttributeError:
+                            # 如果不存在，使用旧版本的方法
+                            connections = len(proc.connections())
                     except (psutil.AccessDenied, psutil.NoSuchProcess):
                         connections = 0
 
@@ -1429,18 +1434,20 @@ class MCPServer(_PluginBase):
                         runtime = f"{runtime_hours / 24:.1f} 天"
 
                     process_stats = {
-                        'pid': pid,
-                        'name': name,
-                        'status': status_str,
-                        'cpu_percent': cpu_percent,
-                        'memory_mb': memory_info.rss / 1024 / 1024,  # 物理内存 MB
-                        'virtual_memory_mb': memory_info.vms / 1024 / 1024,  # 虚拟内存 MB
-                        'memory_percent': memory_percent,
-                        'create_time': create_time_timestamp,  # 返回原始时间戳
-                        'runtime': runtime,
-                        'num_threads': num_threads,
-                        'num_fds': num_fds,
-                        'connections': connections
+                        "pid": pid,
+                        "name": name,
+                        "status": status_str,
+                        "cpu_percent": cpu_percent,
+                        "memory_mb": memory_info.rss / 1024 / 1024,  # 物理内存 MB
+                        "virtual_memory_mb": memory_info.vms
+                        / 1024
+                        / 1024,  # 虚拟内存 MB
+                        "memory_percent": memory_percent,
+                        "create_time": create_time_timestamp,  # 返回原始时间戳
+                        "runtime": runtime,
+                        "num_threads": num_threads,
+                        "num_fds": num_fds,
+                        "connections": connections,
                     }
 
                     return {
@@ -1498,7 +1505,7 @@ class MCPServer(_PluginBase):
                 logger.error("请求体为空")
                 return {
                     "success": False,
-                    "message": "请求体为空，请提供torrent_url参数"
+                    "message": "请求体为空，请提供torrent_url参数",
                 }
 
             # 记录请求体
@@ -1517,10 +1524,7 @@ class MCPServer(_PluginBase):
                         break
 
             if not torrent_url:
-                return {
-                    "success": False,
-                    "message": "缺少种子链接参数"
-                }
+                return {"success": False, "message": "缺少种子链接参数"}
 
             # 如果没有指定下载器，返回错误信息
             if not downloader:
@@ -1530,87 +1534,242 @@ class MCPServer(_PluginBase):
                     "message": (
                         "未指定下载器，请使用get-downloaders工具获取可用的下载器列表，"
                         "然后在请求中提供downloader参数"
-                    )
+                    ),
                 }
 
             # 导入必要的模块
             from app.db.site_oper import SiteOper
             from app.utils.string import StringUtils
+            import re
+            import base64
 
             # 初始化辅助类
             site_oper = SiteOper()
 
-            # 获取种子对应站点cookie
-            domain = StringUtils.get_url_domain(torrent_url)
+            # 检查是否为特殊格式的URL（如M-Team的base64编码URL）
+            is_special_url = torrent_url.startswith("[")
+
+            # 获取种子对应站点域名
+            if is_special_url:
+                # 对于特殊格式URL，从URL部分提取域名
+                m = re.search(r"\[(.*)](.*)", torrent_url)
+                if m:
+                    actual_url = m.group(2)
+                    domain = StringUtils.get_url_domain(actual_url)
+                else:
+                    domain = None
+            else:
+                domain = StringUtils.get_url_domain(torrent_url)
+
             if not domain:
                 return {
                     "success": False,
-                    "message": f"无法从链接获取站点域名: {torrent_url}"
+                    "message": f"无法从链接获取站点域名: {torrent_url}",
                 }
 
             # 查询站点
             site = site_oper.get_by_domain(domain)
-            if not site or not site.cookie:
-                return {
-                    "success": False,
-                    "message": f"无法获取站点 {domain} 的cookie信息"
-                }
+            if not site:
+                return {"success": False, "message": f"未找到站点 {domain} 的配置信息"}
+
+            # 检查站点认证信息
+            has_cookie = bool(site.cookie)
+            has_apikey = bool(site.apikey)
+
+            # 对于特殊格式URL（如M-Team），检查是否需要API key认证
+            if is_special_url:
+                # 解析base64编码的参数
+                try:
+                    m = re.search(r"\[(.*)](.*)", torrent_url)
+                    if m:
+                        base64_str = m.group(1)
+                        req_str = base64.b64decode(base64_str.encode("utf-8")).decode(
+                            "utf-8"
+                        )
+                        req_params = json.loads(req_str)
+
+                        # 检查是否需要API key认证
+                        if (
+                            req_params.get("header", {}).get("x-api-key")
+                            and not has_apikey
+                        ):
+                            return {
+                                "success": False,
+                                "message": f"站点 {domain} 需要API key认证，但未配置apikey",
+                            }
+                        elif req_params.get("cookie") is False and not has_apikey:
+                            return {
+                                "success": False,
+                                "message": f"站点 {domain} 禁用cookie认证且需要API key，但未配置apikey",
+                            }
+                except Exception as e:
+                    logger.error(f"解析特殊URL格式失败: {str(e)}")
+                    return {
+                        "success": False,
+                        "message": f"解析种子链接格式失败: {str(e)}",
+                    }
+            else:
+                # 对于普通URL，检查是否有cookie
+                if not has_cookie:
+                    return {
+                        "success": False,
+                        "message": f"无法获取站点 {domain} 的cookie信息",
+                    }
 
             # 获取下载器服务
             service = self._downloader_helper.get_service(downloader)
             if not service or not service.instance:
                 return {
                     "success": False,
-                    "message": f"获取下载器 {downloader} 实例失败"
+                    "message": f"获取下载器 {downloader} 实例失败",
                 }
 
             if service.instance.is_inactive():
-                return {
-                    "success": False,
-                    "message": f"下载器 {downloader} 未连接"
-                }
+                return {"success": False, "message": f"下载器 {downloader} 未连接"}
+
+            # 处理种子URL和认证信息
+            final_torrent_url = torrent_url
+            cookie = None
+
+            if is_special_url:
+                # 对于特殊格式URL（如M-Team），使用requests直接处理
+                try:
+                    # 解析base64编码的参数
+                    m = re.search(r"\[(.*)](.*)", torrent_url)
+                    if m:
+                        base64_str = m.group(1)
+                        actual_url = m.group(2)
+                        req_str = base64.b64decode(base64_str.encode("utf-8")).decode(
+                            "utf-8"
+                        )
+                        req_params = json.loads(req_str)
+
+                        # 检查是否禁用cookie
+                        if not req_params.get("cookie", True):
+                            cookie = None
+                        else:
+                            cookie = site.cookie
+
+                        # 构建请求头
+                        headers = req_params.get("header", {})
+                        if "x-api-key" in headers and site.apikey:
+                            headers["x-api-key"] = site.apikey
+
+                        # 构建请求参数
+                        request_kwargs = {
+                            "headers": headers,
+                            "timeout": 30,
+                            "verify": False,
+                        }
+
+                        # 添加代理设置
+                        if site.proxy and settings.PROXY:
+                            request_kwargs["proxies"] = settings.PROXY
+
+                        # 添加cookie
+                        if cookie:
+                            # 将cookie字符串转换为字典
+                            cookie_dict = {}
+                            for item in cookie.split(";"):
+                                if "=" in item:
+                                    key, value = item.strip().split("=", 1)
+                                    cookie_dict[key] = value
+                            request_kwargs["cookies"] = cookie_dict
+
+                        # 发送请求获取实际下载地址
+                        if req_params.get("method", "get").lower() == "post":
+                            res = requests.post(
+                                actual_url,
+                                params=req_params.get("params"),
+                                **request_kwargs,
+                            )
+                        else:
+                            res = requests.get(
+                                actual_url,
+                                params=req_params.get("params"),
+                                **request_kwargs,
+                            )
+
+                        if not res or res.status_code != 200:
+                            return {
+                                "success": False,
+                                "message": f"无法获取种子下载地址: {actual_url}, 状态码: {res.status_code if res else 'None'}",
+                            }
+
+                        # 解析响应获取实际下载地址
+                        if req_params.get("result"):
+                            try:
+                                data = res.json()
+                                for key in str(req_params.get("result")).split("."):
+                                    data = data.get(key)
+                                    if not data:
+                                        return {
+                                            "success": False,
+                                            "message": f"无法从响应中解析下载地址",
+                                        }
+                                final_torrent_url = data
+                                logger.info(
+                                    f"获取到M-Team实际下载地址: {final_torrent_url}"
+                                )
+                            except Exception as e:
+                                return {
+                                    "success": False,
+                                    "message": f"解析下载地址响应失败: {str(e)}",
+                                }
+                        else:
+                            final_torrent_url = res.text
+
+                        # 对于API key认证的站点，不使用cookie
+                        if "x-api-key" in headers:
+                            cookie = None
+
+                except Exception as e:
+                    logger.error(f"处理特殊URL格式失败: {str(e)}")
+                    return {"success": False, "message": f"处理种子链接失败: {str(e)}"}
+            else:
+                # 对于普通URL，使用cookie认证
+                cookie = site.cookie
 
             # 添加下载任务
             downloader_instance = service.instance
             download_id = None
-            cookie = site.cookie if site.cookie else None
+
             if self._downloader_helper.is_downloader("qbittorrent", service=service):
-                torrent = downloader_instance.add_torrent(content=torrent_url,
-                                                          download_dir=save_path,
-                                                          is_paused=False,
-                                                          cookie=cookie,
-                                                          tag=[settings.TORRENT_TAG, site.name])
+                torrent = downloader_instance.add_torrent(
+                    content=final_torrent_url,
+                    download_dir=save_path,
+                    is_paused=False,
+                    cookie=cookie,
+                    tag=[settings.TORRENT_TAG, site.name],
+                )
                 if torrent:
                     download_id = torrent
             elif self._downloader_helper.is_downloader("transmission", service=service):
-                torrent = downloader_instance.add_torrent(content=torrent_url,
-                                                          download_dir=save_path,
-                                                          is_paused=False,
-                                                          cookie=cookie,
-                                                          labels=[settings.TORRENT_TAG, site.name])
+                torrent = downloader_instance.add_torrent(
+                    content=final_torrent_url,
+                    download_dir=save_path,
+                    is_paused=False,
+                    cookie=cookie,
+                    labels=[settings.TORRENT_TAG, site.name],
+                )
                 if torrent:
                     download_id = torrent.hashString
 
             if not download_id:
-                return {
-                    "success": False,
-                    "message": "添加下载任务失败"
-                }
+                return {"success": False, "message": "添加下载任务失败"}
 
             return {
                 "success": True,
                 "message": "种子添加下载成功",
                 "site": site.name,
-                "save_path": save_path
+                "save_path": save_path,
+                "download_id": download_id,
             }
 
         except Exception as e:
             logger.error(f"下载种子失败: {str(e)}")
             logger.error(traceback.format_exc())
-            return {
-                "success": False,
-                "message": f"下载种子失败: {str(e)}"
-            }
+            return {"success": False, "message": f"下载种子失败: {str(e)}"}
 
     # --- 获取 MoviePilot 的 access token ---
     def _get_moviepilot_access_token(self) -> Optional[str]:
@@ -1634,23 +1793,21 @@ class MCPServer(_PluginBase):
             token_url = f"{base_url}/api/v1/login/access-token"
 
             # 构建请求数据
-            data = {
-                "username": username,
-                "password": password
-            }
+            data = {"username": username, "password": password}
 
             # 发送请求
             response = requests.post(
                 token_url,
                 data=data,
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
-                timeout=10
+                timeout=10,
             )
 
             if response.status_code != 200:
                 logger.error(
                     f"登录获取 access token 失败，状态码: {response.status_code}, "
-                    f"响应: {response.text}")
+                    f"响应: {response.text}"
+                )
                 return None
 
             # 解析响应获取 access_token
@@ -1683,16 +1840,19 @@ class MCPServer(_PluginBase):
 
     def stop_service(self):
         """停止服务和所有线程"""
-        return
+        logger.info("正在停止MCPServer服务...")
+
+        try:
+            if self._process_manager:
+                self._process_manager.stop_server()
+            logger.info("MCPServer服务已停止...")
+        except Exception as e:
+            logger.error(f"停止MCPServer服务时出错: {str(e)}")
+            logger.error(traceback.format_exc())
 
     def get_dashboard_meta(self) -> Optional[List[Dict[str, str]]]:
         """获取插件仪表盘元信息"""
-        return [
-            {
-                "key": "mcpserver",
-                "name": "MCP Server"
-            }
-        ]
+        return [{"key": "mcpserver", "name": "MCP Server"}]
 
     def get_dashboard(
         self, key: str = "", **kwargs
@@ -1705,22 +1865,21 @@ class MCPServer(_PluginBase):
             kwargs: 额外参数，未使用
         """
         # 获取Dashboard配置
-        dashboard_refresh_interval = self._config.get(
-            "dashboard_refresh_interval", 30)
-        dashboard_auto_refresh = self._config.get(
-            "dashboard_auto_refresh", True)
+        dashboard_refresh_interval = self._config.get("dashboard_refresh_interval", 30)
+        dashboard_auto_refresh = self._config.get("dashboard_auto_refresh", True)
 
-        return {
-            "cols": 12,
-            "md": 6
-        }, {
-            "refresh": dashboard_refresh_interval,  # 使用配置的刷新间隔
-            "border": True,
-            "title": "MCP Server",
-            "subtitle": "启动MCP服务器实现大模型操作MoviePilot",
-            "render_mode": "vue",  # 使用Vue渲染模式
-            "pluginConfig": {  # 传递插件配置给前端组件
-                "dashboard_refresh_interval": dashboard_refresh_interval,
-                "dashboard_auto_refresh": dashboard_auto_refresh
-            }
-        }, None
+        return (
+            {"cols": 12, "md": 6},
+            {
+                "refresh": dashboard_refresh_interval,  # 使用配置的刷新间隔
+                "border": True,
+                "title": "MCP Server",
+                "subtitle": "启动MCP服务器实现大模型操作MoviePilot",
+                "render_mode": "vue",  # 使用Vue渲染模式
+                "pluginConfig": {  # 传递插件配置给前端组件
+                    "dashboard_refresh_interval": dashboard_refresh_interval,
+                    "dashboard_auto_refresh": dashboard_auto_refresh,
+                },
+            },
+            None,
+        )

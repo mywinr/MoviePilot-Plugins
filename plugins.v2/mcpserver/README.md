@@ -98,7 +98,7 @@ JSON格式配置如下：
           "Authorization": "Bearer access_token",
       }
   }
-
+```
 
 其中{host}是Movie Pilot的外网访问域名，{port}是监听端口，可在配置也配置。
 {access_token}是MCP Server的认证令牌，可在配置页面获取。
