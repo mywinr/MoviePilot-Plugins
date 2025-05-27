@@ -127,7 +127,18 @@
               </v-img>
             </v-avatar>
             <div>
-              <v-card-title class="text-h6 pa-0">{{ config?.attrs?.title || 'MCP服务器监控' }}</v-card-title>
+              <div class="d-flex align-center">
+                <v-card-title class="text-h6 pa-0">{{ config?.attrs?.title || 'MCP服务器监控' }}</v-card-title>
+                <v-chip
+                  v-if="serverType"
+                  :color="serverTypeColor"
+                  size="small"
+                  variant="tonal"
+                  class="ml-3"
+                >
+                  {{ serverTypeText }}
+                </v-chip>
+              </div>
               <v-card-subtitle v-if="config?.attrs?.subtitle" class="pa-0">{{ config.attrs.subtitle }}</v-card-subtitle>
             </div>
           </div>
@@ -409,6 +420,7 @@ const refreshing = ref(false)     // 刷新状态
 const lastUpdateTime = ref('')
 const showChart = ref(false)      // 控制图表显示
 const serverType = ref('')        // 服务器类型
+const items = ref([])             // 详细信息列表
 
 // 资源监控相关
 const currentCpu = ref(0)
@@ -797,15 +809,47 @@ async function fetchDashboardData(isInitial = false) {
       serverType.value = serverStatus.server_type
     }
 
-    // 调试信息
-    console.log('Dashboard: 数据获取完成')
-    console.log('Dashboard: serverStatus.running =', serverStatus.running)
-    console.log('Dashboard: serverStatus.server_type =', serverStatus.server_type)
-    console.log('Dashboard: processStatsData.error =', processStatsData?.error)
-    console.log('Dashboard: statusData =', statusData)
-    console.log('Dashboard: processStatsData =', processStatsData)
-    console.log('Dashboard: serverStatus =', serverStatus)
-    console.log('Dashboard: processStats =', processStats)
+    // 构建详细信息列表
+    items.value = []
+
+    // 添加服务器状态信息
+    if (serverStatus) {
+      items.value.push({
+        title: '服务器状态',
+        subtitle: serverStatus.running ? '运行中' : '已停止',
+        status: serverStatus.running ? 'success' : 'error',
+        value: serverStatus.running ? '正常' : '停止'
+      })
+
+      if (serverStatus.server_type) {
+        items.value.push({
+          title: '连接类型',
+          subtitle: serverStatus.server_type === 'sse' ? 'Server-Sent Events' : 'HTTP Streamable',
+          status: 'info',
+          value: serverStatus.server_type === 'sse' ? 'SSE' : 'HTTP'
+        })
+      }
+
+      if (serverStatus.url) {
+        items.value.push({
+          title: '服务地址',
+          subtitle: serverStatus.url,
+          status: 'info',
+          value: serverStatus.listen_address || '未知'
+        })
+      }
+
+      if (serverStatus.pid) {
+        items.value.push({
+          title: '进程ID',
+          subtitle: `PID: ${serverStatus.pid}`,
+          status: 'running',
+          value: serverStatus.pid.toString()
+        })
+      }
+    }
+
+
 
     // 更新最后更新时间
     lastUpdateTime.value = new Date().toLocaleTimeString('zh-CN', {
@@ -865,8 +909,10 @@ async function fetchDashboardData(isInitial = false) {
   } catch (error) {
     console.error('Dashboard: 获取仪表板数据失败:', error)
 
-    // 错误状态 - 不显示图表
+    // 错误状态 - 清理数据
     showChart.value = false
+    items.value = []
+    serverType.value = ''
   } finally {
     // 清除加载状态
     initialLoading.value = false
