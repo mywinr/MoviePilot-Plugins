@@ -506,7 +506,7 @@ class SubscribeTool(BaseTool):
         return [
             types.Tool(
                 name="list-subscribes",
-                description="获取当前所有已订阅的资源列表，包括电影、电视剧、动漫等",
+                description="获取当前所有已订阅的资源列表",
                 inputSchema={
                     "type": "object",
                     "properties": {},
@@ -514,7 +514,7 @@ class SubscribeTool(BaseTool):
             ),
             types.Tool(
                 name="get-subscribe-by-media",
-                description="通过媒体ID获取订阅信息。可以使用recognize-media工具获取媒体的TMDB ID、豆瓣ID等。",
+                description="通过媒体ID获取订阅信息。",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -528,7 +528,7 @@ class SubscribeTool(BaseTool):
             ),
             types.Tool(
                 name="add-subscribe",
-                description="添加新的影视资源订阅。处理流程：1)调用recognize-media工具识别媒体；2)构建订阅参数(name,type,year,season等)；3)向用户确认订阅信息(格式:'我已识别到[媒体名称][类型][年份]，确认要订阅吗？')；4)用户确认后，调用本工具。重要：在执行订阅操作前，必须向用户展示识别结果并获取确认，只有用户明确同意后才执行订阅操作。",
+                description="添加新的影视资源订阅。",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -602,7 +602,7 @@ class SubscribeTool(BaseTool):
             ),
             types.Tool(
                 name="delete-subscribe",
-                description="删除指定ID的订阅，如果仅知道名称，请先调用get-subscribe-by-media工具获取订阅ID。",
+                description="删除指定ID的订阅，",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -616,7 +616,7 @@ class SubscribeTool(BaseTool):
             ),
             types.Tool(
                 name="get-subscribe-detail",
-                description="获取某资源订阅详细信息，如更新集数、站点、下载状态等等。如没有指定ID，请先调用list-subscribes工具获取订阅ID。",
+                description="获取某资源订阅详细信息，如更新集数、站点、下载状态等",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -644,12 +644,10 @@ class SubscribeTool(BaseTool):
                         },
                         "type": {
                             "type": "string",
-                            "description": "资源类型，如：电影、电视剧、动漫等",
                             "enum": ["电影", "电视剧", "动漫"]
                         },
                         "year": {
                             "type": "string",
-                            "description": "资源年份，如：2023"
                         },
                         "season": {
                             "type": "integer",

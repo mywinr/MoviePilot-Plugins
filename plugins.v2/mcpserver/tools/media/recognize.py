@@ -816,22 +816,19 @@ class MediaRecognizeTool(BaseTool):
         return [
             types.Tool(
                 name="recognize-media",
-                description="识别媒体信息，根据标题和年份识别电影、电视剧等媒体的详细信息，识别结果包含标准化的标题和年份、TMDB/豆瓣/IMDB ID、媒体类型和评分、季集信息(电视剧)、简介等。",
+                description="识别媒体信息，根据标题和年份识别电影、电视剧等媒体的详细信息。",
                 inputSchema={
                     "type": "object",
                     "required": ["title"],
                     "properties": {
                         "title": {
                             "type": "string",
-                            "description": "媒体标题"
                         },
                         "year": {
                             "type": "string",
-                            "description": "媒体年份，如 2023"
                         },
                         "type": {
                             "type": "string",
-                            "description": "媒体类型，如：电影、电视剧",
                             "enum": ["电影", "电视剧"]
                         }
                     },
@@ -839,29 +836,25 @@ class MediaRecognizeTool(BaseTool):
             ),
             types.Tool(
                 name="search-media",
-                description="搜索媒体或人物信息，返回匹配的列表供用户选择。可搜索电影、电视剧(type=media)或演员、导演等人物(type=person)。搜索结果包含标题/姓名、年份、类型、ID等信息。在执行资源搜索、订阅等操作前建议先使用本工具。如果只返回一个结果，可直接使用其ID进行后续操作。",
+                description="搜索媒体（media）或人物（person）信息，返回匹配的列表供用户选择。",
                 inputSchema={
                     "type": "object",
                     "required": ["keyword"],
                     "properties": {
                         "keyword": {
                             "type": "string",
-                            "description": "搜索关键词"
                         },
                         "type": {
                             "type": "string",
-                            "description": "搜索类型，默认为'media'(媒体)，可选'person'(人物)",
                             "enum": ["media", "person"],
                             "default": "media"
                         },
                         "page": {
                             "type": "integer",
-                            "description": "页码，默认为1",
                             "default": 1
                         },
                         "count": {
                             "type": "integer",
-                            "description": "每页结果数，默认为8",
                             "default": 8
                         }
                     },
@@ -869,23 +862,21 @@ class MediaRecognizeTool(BaseTool):
             ),
             types.Tool(
                 name="person-credits",
-                description="查询演员、导演等人物参演的作品列表。返回按年份排序的电影和电视剧作品，包括标题、原始标题、上映年份、简介、海报等信息。支持分页查询和年份筛选，从page=1开始，如果返回结果为空则表示已获取全部作品。当指定year参数时，将自动获取该年份的所有作品，无需分页",
+                description="查询演员、导演等人物参演的作品列表。",
                 inputSchema={
                     "type": "object",
                     "required": ["person_id"],
                     "properties": {
                         "person_id": {
                             "type": "integer",
-                            "description": "人物ID(整数)，可通过search-media工具获取"
+                            "description": "可通过search-media工具获取"
                         },
                         "page": {
                             "type": "integer",
-                            "description": "页码，默认为1。从1开始递增查询，直到返回空结果表示已获取全部作品。当指定year参数时，此参数将被忽略",
                             "default": 1
                         },
                         "year": {
                             "type": "integer",
-                            "description": "筛选特定年份的作品，例如2023只显示2023年的作品。不指定则显示所有年份。当指定此参数时，将自动获取该年份的所有作品，无需分页"
                         }
                     },
                 },

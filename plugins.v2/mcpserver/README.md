@@ -156,6 +156,92 @@ JSON格式配置如下：
 - 执行工具前优先从历史消息中查找需要的信息，如没有需要的信息再调用工具
 ```
 
+## 怎么玩
+
+### 直连
+
+通过支持自定义Header的客户端,如[Cherry Studio](https://github.com/CherryHQ/cherry-studio)，按照上文配置即可连接。
+
+### MCPHub中转
+
+可惜的是目前大部分客户端还不支持自定义Header，所以无法直连到MCP Server。这时我们可以用上一个开源项目[mcphub](https://github.com/samanhappy/mcphub)。它可以聚合多个MCP服务器，提供一个统一的调用接口。
+
+但mcphub仍然不支持自定义Header，所以无法传递认证信息。我们可以通过Nginx来做一层解析，通过在url中传递auth token，在Nginx中提取出来，设置到Header中。配置如下:
+
+```json
+server {
+    listen 0.0.0.0:3112;  # 端口号与mcp server监听的端口号区别开
+    server_name _;        # 通配任意域名访问
+
+    location / {
+        access_by_lua_block {
+            local token = ngx.var.arg_token
+            if token and token ~= "" then
+                ngx.req.set_header("Authorization", "Bearer " .. token)
+            end
+        }
+
+        proxy_pass http://127.0.0.1:3111;  # 后端 MCP Server 地址
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # SSE支持（如果后端有SSE需求）
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Accept-Encoding "";
+        proxy_read_timeout 3600s;
+    }
+}
+```
+将上述内容添加到一个.conf文件放到Nginx的配置目录下，重启Nginx即可。这个配置是将url中的?token=xxx中的xxx解析出来放入到Header中，作为Authorization的参数，这样就不需要在客户端自定义Header了。
+
+接下来安装mcphub，下面是一个compose配置，供参考:
+```yml
+services:
+  mcphub:
+    image: samanhappy/mcphub:latest
+    container_name: mcphub
+    restart: always
+    networks:
+      - bridge
+    ports:
+      - "3007:3000"
+    volumes:
+      - ./mcp_settings.json:/app/mcp_settings.json
+    environment:
+      - PUID=0
+      - PGID=0
+networks:
+  bridge:
+    driver: bridge
+```
+启动后进入webui添加服务器，服务器类型选择Streamable HTTP（要求MCP Server设置到Streamable HTTP模式，服务器URL填`http://172.17.0.1:3112/mcp/?token=xxxxx`，其中`172.17.0.1`访问到host，根据你自己的情况调整，`3112`是Nginx监听的端口，`xxxxx`是MCP Server的认证令牌，可在配置页面获取。然后点击添加就可以看到刚添加的服务器状态为在线。
+
+服务器添加完成后就可以通过mcphub来调用MCP Server了。比如这里mcphub暴露出来的端口是3007，那么在客户端中配置mcp服务器地址，如果想要Streamable HTTP就填`http://172.17.0.1:3007/mcp`，如果想要SSE就填`http://172.17.0.1:3007/sse`。不建议将mcphub暴露到公网，因为别人只要知道你的域名和端口号就可以直接操作MoviePilot了。可以在局域网部署一些项目用来访问MCP Server，比如我就尝试了下面两种玩法。
+
+#### [lobechat](https://github.com/lobehub/lobe-chat)
+
+安装部署这里就不再赘述了，lobe的MCP入口比较难找，在 助手 -> 插件设置 -> 自定义插件里，选择 Streamable HTTP模式，Streamable HTTP Endpoint URL直接填`http://172.17.0.1:3007/mcp`，然后保存即可。
+
+#### [Astrbot](https://github.com/AstrBotDevs/AstrBot)
+
+项目介绍、安装跳过。部署好之后在MCP设置中添加MCP服务器，配置如下：
+
+```json
+{
+  "url": "http://172.17.0.1:3007/sse"
+}
+```
+和lobe不同，astrbot仅支持sse。
+
+其它的玩法大家自行摸索哈。有同学可能要问了，为什么不直接在lobe或者astrbot中使用`http://172.17.0.1:3112/mcp/?token=xxxxx`的方式，而非要用mcphub中转一下呢？好问题，我也觉得中间转一次很傻，但是lobe和astrbot直接使用上述链接就是走不通，具体原理我也不太懂了，有同学试出来可以和大家分享一下。
+
+当前的方案只是由于市面上客户端支持度不够的权宜之计，相信很快就会有更多的客户端支持自定义Header，届时就可以直接连到MCP Server了。
+
 ## 技术支持
 
 如有任何问题或建议，请通过以下方式联系：

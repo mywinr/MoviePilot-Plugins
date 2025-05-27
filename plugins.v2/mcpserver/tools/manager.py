@@ -8,8 +8,6 @@ from .site.sites import GetSitesTool
 from .media.subscribe import SubscribeTool
 from .media.download import MovieDownloadTool
 from .media.recognize import MediaRecognizeTool
-from .prompt.media_prompt import MediaPromptTool
-from .system.process_monitor import ProcessMonitorTool
 
 
 # Configure logging
@@ -31,9 +29,7 @@ class ToolManager:
             GetSitesTool,
             SubscribeTool,
             MovieDownloadTool,
-            MediaRecognizeTool,
-            MediaPromptTool,
-            ProcessMonitorTool
+            MediaRecognizeTool
         ]
 
         for tool_class in tools:

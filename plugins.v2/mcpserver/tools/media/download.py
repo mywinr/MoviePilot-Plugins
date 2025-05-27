@@ -28,8 +28,6 @@ class MovieDownloadTool(BaseTool):
             return await self._download_torrent(arguments)
         elif tool_name == "get-downloaders":
             return await self._get_downloaders(arguments)
-        elif tool_name == "get-resource-cache-stats":
-            return await self._get_resource_cache_stats(arguments)
         else:
             return [
                 types.TextContent(
@@ -603,47 +601,13 @@ class MovieDownloadTool(BaseTool):
                 )
             ]
 
-    async def _get_resource_cache_stats(
-        self, _: dict = None
-    ) -> list[types.TextContent]:
-        """
-        获取资源缓存统计信息
-        参数:
-            - _: 工具参数（当前未使用）
-        """
-        try:
-            stats = resource_cache.get_cache_stats()
-
-            result_text = "资源缓存统计信息：\n\n"
-            result_text += f"总缓存条目数: {stats.get('total_count', 0)}\n"
-            result_text += f"活跃条目数: {stats.get('active_count', 0)}\n"
-            result_text += f"过期条目数: {stats.get('expired_count', 0)}\n"
-            result_text += f"最大缓存大小: {stats.get('max_size', 0)}\n"
-            result_text += f"缓存过期时间: {stats.get('ttl_seconds', 0)} 秒\n"
-
-            return [
-                types.TextContent(
-                    type="text",
-                    text=result_text
-                )
-            ]
-
-        except Exception as e:
-            logger.error(f"获取缓存统计信息时出错: {str(e)}")
-            return [
-                types.TextContent(
-                    type="text",
-                    text=f"获取缓存统计信息时出错: {str(e)}"
-                )
-            ]
-
     @property
     def tool_info(self) -> list[types.Tool]:
         """返回工具的描述信息"""
         return [
             types.Tool(
                 name="search-media-resources",
-                description="搜索媒体资源，支持按名称、年份、清晰度等条件搜索，返回资源标识符（隐藏真实下载链接以保护隐私）。可以通过keyword参数或mediaid参数指定要搜索的媒体，推荐先使用search-media工具获取准确的mediaid。返回的资源标识符可用于download-torrent工具进行下载。",
+                description="通过keyword参数或mediaid参数搜索媒体资源，支持按名称、年份、清晰度等条件搜索，返回资源标识符。",
                 inputSchema={
                     "type": "object",
                     "required": ["sites"],
@@ -658,7 +622,6 @@ class MovieDownloadTool(BaseTool):
                         },
                         "year": {
                             "type": "string",
-                            "description": "媒体年份，如 2023"
                         },
                         "resolution": {
                             "type": "string",
@@ -681,30 +644,27 @@ class MovieDownloadTool(BaseTool):
             ),
             types.Tool(
                 name="fuzzy-search-media-resources",
-                description="模糊搜索媒体资源，当精确搜索无法识别媒体信息时使用此工具，返回资源标识符（隐藏真实下载链接以保护隐私）。返回的资源标识符可用于download-torrent工具进行下载。",
+                description="模糊搜索媒体资源，当精确搜索无法识别媒体信息时使用此工具，返回资源标识符。",
                 inputSchema={
                     "type": "object",
                     "required": ["keyword", "sites"],
                     "properties": {
                         "keyword": {
                             "type": "string",
-                            "description": "搜索关键词，模糊的影视名字"
                         },
                         "page": {
                             "type": "integer",
-                            "description": "页码，默认为0"
                         },
                         "sites": {
                             "type": "string",
-                            "description": "站点ID列表，多个站点ID用逗号分隔，是数字ID不是站点名称，若没有站点ID可以通过工具get-sites获取"
+                            "description": "站点数字ID列表，多个站点ID用逗号分隔，可通过工具get-sites获取"
                         },
                         "detailed": {
                             "type": "boolean",
-                            "description": "是否显示详细信息，默认为false，设置为true会显示更多资源详情"
+                            "description": "是否显示详细信息，默认为false"
                         },
                         "limit": {
                             "type": "integer",
-                            "description": "最大返回结果数量，默认为50，设置为较小的值可以减少返回的资源数量"
                         }
                     },
                 },
@@ -719,18 +679,18 @@ class MovieDownloadTool(BaseTool):
             ),
             types.Tool(
                 name="download-torrent",
-                description="通过资源下载链接或资源标识符下载资源。支持两种方式：1)直接提供torrent_url；2)提供从search-media-resources获取的resource_id",
+                description="通过资源下载链接或资源标识符下载资源。torrent_url和resource_id二选一",
                 inputSchema={
                     "type": "object",
                     "required": ["media_type"],
                     "properties": {
                         "torrent_url": {
                             "type": "string",
-                            "description": "资源下载链接（与resource_id二选一）"
+                            "description": "资源下载链接"
                         },
                         "resource_id": {
                             "type": "string",
-                            "description": "资源标识符，从search-media-resources工具获取（与torrent_url二选一）"
+                            "description": "资源标识符"
                         },
                         "downloader": {
                             "type": "string",
@@ -745,14 +705,6 @@ class MovieDownloadTool(BaseTool):
                             "description": "电影 or 电视剧"
                         }
                     },
-                },
-            ),
-            types.Tool(
-                name="get-resource-cache-stats",
-                description="获取资源缓存统计信息，用于查看当前缓存状态",
-                inputSchema={
-                    "type": "object",
-                    "properties": {},
                 },
             )
         ]
