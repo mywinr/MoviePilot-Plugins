@@ -8,6 +8,7 @@ from .site.sites import GetSitesTool
 from .media.subscribe import SubscribeTool
 from .media.download import MovieDownloadTool
 from .media.recognize import MediaRecognizeTool
+from .database.pt_stats import PTStatsTool
 
 
 # Configure logging
@@ -29,7 +30,8 @@ class ToolManager:
             GetSitesTool,
             SubscribeTool,
             MovieDownloadTool,
-            MediaRecognizeTool
+            MediaRecognizeTool,
+            PTStatsTool
         ]
 
         for tool_class in tools:

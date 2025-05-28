@@ -12,6 +12,8 @@ MCP Server 是一个为 MoviePilot 提供大语言模型服务的插件，它通
 - **资源订阅**：支持订阅电影、电视剧资源，自动追踪更新
 - **媒体识别**：智能识别用户提供的模糊媒体信息，转换为准确的媒体数据
 - **智能建议**：自动检查和纠正电影名称错误
+- **人物作品查询**：查询演员、导演等人物的参演作品
+- **PT站点统计**：查询PT站点的详细数据统计
 
 ## 安装与配置
 
@@ -20,44 +22,114 @@ MCP Server 是一个为 MoviePilot 提供大语言模型服务的插件，它通
 3. 配置以下参数：
    - **用户名/密码**：用于获取 MoviePilot 的访问令牌
    - **API 密钥（自动生成）**：用于与 MCP Server 通信的密钥
+   - **服务器类型**：选择 HTTP Streamable 或 Server-Sent Events (SSE)
+   - **监听地址和端口**：配置服务器监听的地址和端口
 
-## 使用方法
+## MCP工具详细文档
 
-### 启动服务器
+### 工具列表
 
-1. 在插件页面中，确保插件已启用
-2. 点击"启动服务器"按钮启动 MCP Server
-3. 服务器状态会显示在页面上，包括运行状态和端口信息
+| 工具名称 | 描述 | 必需参数 | 可选参数 | 示例用法 | 返回格式 |
+|---------|------|----------|----------|----------|----------|
+| **用户信息工具** |
+| `user-info` | 获取当前用户信息 | 无 | 无 | `user-info` | 用户详细信息文本 |
+| `get-user` | 获取指定用户信息 | `username` (string) | 无 | `get-user username="admin"` | 指定用户详细信息文本 |
+| **站点管理工具** |
+| `get-sites` | 获取所有站点信息 | 无 | 无 | `get-sites` | 站点列表（ID、名称、优先级） |
+| **媒体识别工具** |
+| `recognize-media` | 识别媒体信息 | `title` (string) | `year` (string), `type` (enum: 电影/电视剧) | `recognize-media title="星际穿越" year="2014"` | 媒体详细信息（TMDB ID、豆瓣ID等） |
+| `search-media` | 搜索媒体或人物信息 | `keyword` (string) | `type` (enum: media/person), `page` (int), `count` (int) | `search-media keyword="克里斯托弗·诺兰" type="person"` | 搜索结果列表 |
+| `person-credits` | 查询人物参演作品 | `person_id` (int) | `page` (int), `year` (int) | `person-credits person_id=525 year=2023` | 人物作品列表（电影、电视剧） |
+| **资源搜索工具** |
+| `search-media-resources` | 搜索媒体资源 | `sites` (string) | `keyword` (string), `mediaid` (string), `year` (string), `resolution` (string), `media_type` (string), `limit` (int) | `search-media-resources mediaid="tmdb:157336" sites="1,2,3"` | 资源列表（包含资源标识符） |
+| `fuzzy-search-media-resources` | 模糊搜索媒体资源 | `keyword` (string), `sites` (string) | `page` (int), `detailed` (bool), `limit` (int) | `fuzzy-search-media-resources keyword="星际穿越" sites="1,2"` | 模糊匹配的资源列表 |
+| `search-site-resources` | 在指定站点搜索资源 | `site_id` (string), `keyword` (string) | `cat` (string), `limit` (int) | `search-site-resources site_id="1" keyword="星际穿越" cat="501"` | 站点特定资源列表 |
+| **下载工具** |
+| `get-downloaders` | 获取可用下载器列表 | 无 | 无 | `get-downloaders` | 下载器列表（名称、类型） |
+| `download-torrent` | 下载种子资源 | `media_type` (string) | `torrent_url` (string), `resource_id` (string), `downloader` (string), `save_path` (string) | `download-torrent resource_id="abc123" media_type="电影"` | 下载状态信息 |
+| **订阅管理工具** |
+| `list-subscribes` | 获取所有订阅列表 | 无 | 无 | `list-subscribes` | 订阅列表详情 |
+| `get-subscribe-by-media` | 通过媒体ID获取订阅 | `media_id` (string) | 无 | `get-subscribe-by-media media_id="tmdb:157336"` | 特定媒体的订阅信息 |
+| `add-subscribe` | 添加新订阅 | `name` (string) | `type` (enum), `year` (string), `season` (int), `tmdbid` (int), `doubanid` (string), `keyword` (string), `sites` (array), `downloader` (string) 等 | `add-subscribe name="星际穿越" type="电影" tmdbid=157336` | 订阅创建结果 |
+| `delete-subscribe` | 删除订阅 | `id` (int) | 无 | `delete-subscribe id=123` | 删除操作结果 |
+| `get-subscribe-detail` | 获取订阅详情 | `id` (int) | 无 | `get-subscribe-detail id=123` | 订阅详细信息 |
+| `update-subscribe` | 更新订阅信息 | `id` (int) | 与add-subscribe相同的可选参数 | `update-subscribe id=123 name="新名称"` | 更新操作结果 |
+| **数据统计工具** |
+| `query-pt-stats` | 查询PT站点统计数据 | `site_domain` (string) 或 `site_name` (string) | 无 | `query-pt-stats site_name="馒头"` | PT站点详细统计（魔力值、做种数、分享率等） |
 
-### 使用工具
+### 提示（Prompts）列表
 
-MCP Server 提供了多种工具，可以通过大语言模型调用：
+| 提示名称 | 功能/目的 | 输入要求 | 示例用法 | 预期输出 |
+|---------|----------|----------|----------|----------|
+| `search-movie-strategy` | 指导如何高效地搜索电影资源 | `keyword` (必需), `year` (可选) | `search-movie-strategy keyword="星际穿越" year="2014"` | 详细的电影资源搜索策略指南，包括搜索步骤、评估标准、失败处理等 |
+| `person-credits-strategy` | 指导如何搜索和展示演员、导演等人物的参演作品 | `name` (必需), `year` (可选) | `person-credits-strategy name="克里斯托弗·诺兰" year="2023"` | 人物作品搜索和展示策略，包括搜索方法、分页处理、结果展示格式等 |
 
-#### 媒体识别工具
+### 参数说明
 
-- **recognize-media**：识别电影/电视剧信息，获取 TMDB ID、豆瓣 ID 等
-- **get-media-prompt**：获取媒体识别的处理指南
+#### 资源分类代码（cat参数）
+- `501` = 电影
+- `502` = 剧集/电视剧
+- `503` = 纪录片
+- `504` = 动画
+- `505` = 综艺
 
-#### 资源搜索工具
+#### 媒体ID格式
+- TMDB格式：`tmdb:123456`
+- 豆瓣格式：`douban:123456`
+- Bangumi格式：`bangumi:123456`
 
-- **search-movie**：搜索电影资源
-- **search-tv**：搜索电视剧资源
-- **search-anime**：搜索动漫资源
+#### 站点ID获取
+使用 `get-sites` 工具获取所有可用站点的ID、名称和优先级信息。
 
-#### 资源下载工具
+### 认证要求
 
-- **download-resource**：下载指定的资源
-- **confirm-download**：确认下载操作
+所有MCP工具调用都需要Bearer Token认证：
+- **Header方式**：`Authorization: Bearer your_access_token`
+- **URL参数方式**：`?token=your_access_token`（需要Nginx配置支持）
 
-#### 订阅管理工具
+访问令牌可在插件配置页面获取或重新生成。
 
-- **list-subscribes**：获取所有订阅资源列表
-- **add-subscribe**：添加新的订阅
-- **delete-subscribe**：删除指定的订阅
-- **get-subscribe-detail**：获取订阅详情
-- **update-subscribe**：更新订阅信息
-- **get-subscribe-by-media**：通过媒体 ID 获取订阅信息
+### 使用示例
 
+#### 1. 媒体搜索和资源下载完整流程
+
+```
+用户：请帮我搜索并下载电影《星际穿越》，要求4K分辨率
+
+AI执行步骤：
+1. search-media keyword="星际穿越" type="media"
+2. search-media-resources mediaid="tmdb:157336" sites="1,2,3" resolution="4K"
+3. download-torrent resource_id="abc123" media_type="电影"
+```
+
+#### 2. 人物作品查询流程
+
+```
+用户：查询克里斯托弗·诺兰2023年的作品
+
+AI执行步骤：
+1. search-media keyword="克里斯托弗·诺兰" type="person"
+2. person-credits person_id=525 year=2023
+```
+
+#### 3. 订阅管理流程
+
+```
+用户：订阅《权力的游戏》第8季
+
+AI执行步骤：
+1. search-media keyword="权力的游戏" type="media"
+2. add-subscribe name="权力的游戏" type="电视剧" season=8 tmdbid=1399
+```
+
+#### 4. PT站点统计查询
+
+```
+用户：查看馒头站点的统计数据
+
+AI执行步骤：
+1. query-pt-stats site_name="馒头"
+```
 
 ### 客户端配置示例
 
@@ -103,58 +175,84 @@ JSON格式配置如下：
 其中{host}是Movie Pilot的外网访问域名，{port}是监听端口，可在配置也配置。
 {access_token}是MCP Server的认证令牌，可在配置页面获取。
 
-## 使用示例
+## 高级使用技巧
 
-### 搜索电影资源
+### 搜索策略优化
 
-```
-请帮我搜索电影《星际穿越》，要求4K分辨率
-```
+1. **精确搜索优先**：先使用 `search-media` 获取准确的媒体ID，再用 `search-media-resources` 搜索资源
+2. **站点选择**：通过 `get-sites` 获取站点列表，优先选择高优先级站点
+3. **模糊搜索备用**：当精确搜索失败时，使用 `fuzzy-search-media-resources` 进行模糊搜索
+4. **分批搜索**：避免一次搜索过多站点，建议每次搜索3-5个站点
 
-### 下载电影资源
+### 资源筛选技巧
 
-```
-请下载《流浪地球2》，要求1080P，优先选择国语配音版本
-```
+1. **分辨率筛选**：使用 `resolution` 参数指定期望的清晰度（如 "4K", "1080p", "720p"）
+2. **资源评估**：关注做种人数、资源大小、字幕信息等指标
+3. **免费资源**：优先选择有流量优惠的资源
+4. **制作组选择**：根据制作组声誉选择高质量资源
 
-### 添加订阅
+### 批量操作
 
-```
-请订阅《权力的游戏》第8季
-```
+1. **批量订阅**：可以连续调用 `add-subscribe` 添加多个订阅
+2. **订阅管理**：定期使用 `list-subscribes` 查看和管理订阅状态
+3. **站点统计**：使用 `query-pt-stats` 监控各站点的数据状况
 
-### 查看订阅列表
-
-```
-请列出我当前所有的订阅
-```
-
-## 推荐的system prompt
+## 推荐的System Prompt
 
 ```text
-电影资源搜索策略
-搜索电影资源时：
-- 先用search-media工具获取媒体信息，确认正确的mediaid
-- 使用search-media-resources工具搜索资源
-- 搜索资源时使用的站点依次从优先级高到低选5个站点，站点id通过get-sites获取
-- 搜索失败时尝试：模糊搜索、使用不同名称变体、使用原语言名称
-- 找到合适资源后停止搜索，避免浪费token
-- 若指定了站点则使用工具search-site-resources
+# MoviePilot MCP Server 操作指南
 
-人物作品搜索策略
-搜索人物作品时：
-- 先用search-media工具（type="person"）确认person_id
-- 使用person-credits工具获取作品列表，从第一页开始
-- 若用户未指定年份时则依次遍历所有页面，切换页面时询问用户是否继续
-- 展示作品信息时：按年份排序、分类展示、包含海报和详情链接
-- 如果用户要搜索某个作品的资源，请使用返回的media id调用search-media-resources工具搜索
+你是一个专业的影视资源管理助手，通过MoviePilot MCP Server帮助用户搜索、下载和管理影视资源。
 
-资源下载策略
-- 如未指定保存路径则留空
+## 核心操作策略
 
-整体策略
-- 如果有图片链接请使用markdown的嵌入HTML的方式展示，如：<img src="https://image_source.png" alt="image" width="300"/>
-- 执行工具前优先从历史消息中查找需要的信息，如没有需要的信息再调用工具
+### 电影资源搜索策略
+1. **媒体识别**：先用search-media工具获取媒体信息，确认正确的mediaid
+2. **资源搜索**：使用search-media-resources工具搜索资源，优先使用mediaid参数
+3. **站点选择**：通过get-sites获取站点列表，依次从优先级高到低选择3-5个站点
+4. **搜索优化**：找到合适资源后停止搜索，避免浪费token
+5. **备用方案**：搜索失败时尝试模糊搜索、不同名称变体、原语言名称
+6. **指定站点**：若用户指定站点则使用search-site-resources工具
+
+### 人物作品搜索策略
+1. **人物确认**：先用search-media工具（type="person"）确认person_id
+2. **作品获取**：使用person-credits工具获取作品列表，从第一页开始
+3. **分页处理**：
+   - 有年份限制：自动获取所有页面
+   - 无年份限制：分页展示，询问用户是否继续
+4. **信息展示**：按年份排序、分类展示、包含海报和详情链接
+5. **后续操作**：如用户对某作品感兴趣，使用返回的media_id搜索资源
+
+### 资源下载策略
+1. **下载器选择**：使用get-downloaders获取可用下载器
+2. **路径处理**：如未指定保存路径则留空，使用默认路径
+3. **资源验证**：下载前确认资源信息和用户意图
+
+### 订阅管理策略
+1. **订阅创建**：使用准确的媒体信息创建订阅
+2. **参数优化**：根据用户需求设置合适的搜索参数
+3. **订阅维护**：定期检查和更新订阅状态
+
+## 展示格式要求
+
+1. **图片展示**：使用markdown格式展示海报图片
+   ```markdown
+   ![电影标题](海报链接)
+   ```
+
+2. **链接格式**：将详情链接格式化为可点击链接
+   ```markdown
+   [详情](详情链接)
+   ```
+
+3. **信息整理**：按类型分类展示，突出重要信息
+
+## 注意事项
+
+1. **隐私保护**：不要暴露包含passkey的下载链接
+2. **Token优化**：避免不必要的重复调用，优先从历史消息获取信息
+3. **错误处理**：遇到错误时提供清晰的解决建议
+4. **用户体验**：提供友好的交互体验，及时反馈操作结果
 ```
 
 ## 怎么玩
