@@ -27,7 +27,7 @@
     "MCPServer": {
         "name": "MCP Server",
         "description": "使用MCP客户端通过大模型来操作MoviePilot",
-        "labels": "系统设置",
+        "labels": "MCP",
         "version": "1.9",
         "icon": "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/mcp.png",
         "author": "DzAvril",
@@ -49,7 +49,20 @@
     "McpToolExample": {
         "name": "MCP Tool Example",
         "description": "演示如何向MCP Server注册自定义工具",
-        "labels": "系统设置",
+        "labels": "MCP",
+        "version": "1.0",
+        "icon": "",
+        "author": "DzAvril",
+        "level": 1,
+        "v2": true,
+        "history": {
+            "v1.0": "新建"
+        }
+    },
+    "PluginHeatMonitor": {
+        "name": "插件热度监控",
+        "description": "监控已安装的下载量热度",
+        "labels": "插件",
         "version": "1.0",
         "icon": "",
         "author": "DzAvril",
