@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
 from threading import Lock
 
+from apscheduler.triggers.cron import CronTrigger
 from app.plugins import _PluginBase
 from app.core.plugin import PluginManager
 from app.helper.plugin import PluginHelper
@@ -21,7 +22,7 @@ class PluginHeatMonitor(_PluginBase):
     plugin_name = "插件热度监控"
     plugin_desc = "监控已安装的下载量热度"
     plugin_icon = "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/heatmonitor.png"
-    plugin_version = "1.0"
+    plugin_version = "1.1"
     plugin_author = "DzAvril"
     author_url = "https://github.com/DzAvril"
     plugin_config_prefix = "pluginheatmonitor_"
@@ -30,8 +31,10 @@ class PluginHeatMonitor(_PluginBase):
     
     # 私有属性
     _enabled = False
-    _check_interval = 60  # 检查间隔（分钟）
+    _cron = "0 */1 * * *"  # 默认每小时执行一次
     _monitored_plugins = {}  # 监控的插件配置
+    _enable_notification = True  # 是否启用通知
+    _run_once = False  # 立即运行一次
     _scheduler = None
     _lock = Lock()
     
@@ -39,28 +42,30 @@ class PluginHeatMonitor(_PluginBase):
         """初始化插件"""
         if config:
             self._enabled = config.get("enabled", False)
-            self._check_interval = config.get("check_interval", 60)
+            self._cron = config.get("cron", "0 */1 * * *")
             self._monitored_plugins = config.get("monitored_plugins", {})
+            self._enable_notification = config.get("enable_notification", True)
+            self._run_once = config.get("run_once", False)
 
             # 处理新的插件监控配置
-            selected_plugin = config.get("selected_plugin")
+            selected_plugins = config.get("selected_plugins", [])
             download_increment = config.get("download_increment")
 
-            if selected_plugin and download_increment:
+            if selected_plugins and download_increment:
                 # 解析下载增量设置
                 try:
                     increment_value = int(download_increment)
                     if increment_value > 0:
-                        self._monitored_plugins[selected_plugin] = {
-                            "download_increment": increment_value
-                        }
-                        logger.info(f"添加插件监控：{selected_plugin}，下载增量：{increment_value}")
+                        # 为每个选中的插件添加监控
+                        for plugin_id in selected_plugins:
+                            self._monitored_plugins[plugin_id] = {
+                                "download_increment": increment_value
+                            }
+                            logger.info(f"添加插件监控：{plugin_id}，下载增量：{increment_value}")
 
-                        # 清空临时配置并保存
-                        config["selected_plugin"] = ""
-                        config["download_increment"] = ""
-                        config["monitored_plugins"] = self._monitored_plugins
-                        self.update_config(config)
+                        # 更新监控插件配置，但不清空用户界面的临时字段
+                        # 这样用户可以继续看到刚才的选择，方便进行调整
+                        logger.info(f"成功添加 {len(selected_plugins)} 个插件到监控列表")
                 except ValueError as e:
                     logger.error(f"解析下载增量设置失败：{str(e)}")
 
@@ -69,8 +74,19 @@ class PluginHeatMonitor(_PluginBase):
 
         if self._enabled:
             logger.info("插件热度监控已启用")
-            logger.info(f"插件热度监控定时任务已配置，检查间隔：{self._check_interval}分钟")
+            logger.info(f"插件热度监控定时任务已配置，Cron表达式：{self._cron}")
             logger.info(f"当前监控 {len(self._monitored_plugins)} 个插件")
+            logger.info(f"通知功能：{'启用' if self._enable_notification else '禁用'}")
+
+            # 处理立即运行一次
+            if self._run_once:
+                logger.info("执行立即运行一次...")
+                self._check_plugin_heat()
+                # 关闭立即运行开关
+                if config:
+                    config["run_once"] = False
+                    self.update_config(config)
+                logger.info("立即运行完成，开关已关闭")
         else:
             logger.info("插件热度监控已禁用")
     
@@ -82,14 +98,14 @@ class PluginHeatMonitor(_PluginBase):
         """
         注册插件服务
         """
-        if self._enabled and self._check_interval:
+        if self._enabled and self._cron:
             return [
                 {
                     "id": "PluginHeatMonitor",
                     "name": "插件热度监控",
-                    "trigger": "interval",
+                    "trigger": CronTrigger.from_crontab(self._cron),
                     "func": self._check_plugin_heat,
-                    "kwargs": {"minutes": self._check_interval}
+                    "kwargs": {}
                 }
             ]
         return []
@@ -219,14 +235,16 @@ class PluginHeatMonitor(_PluginBase):
                    f"📈 下载增量：{increment:,}\n"
                    f"⏱️ 用时：{time_str}")
 
-            # 发送通知
-            self.post_message(
-                mtype=NotificationType.Plugin,
-                title=title,
-                text=text
-            )
-
-            logger.info(f"插件 {plugin_name} 下载增量 {increment}，当前下载量：{current_downloads}，用时：{time_str}")
+            # 发送通知（如果启用）
+            if self._enable_notification:
+                self.post_message(
+                    mtype=NotificationType.Plugin,
+                    title=title,
+                    text=text
+                )
+                logger.info(f"插件 {plugin_name} 下载增量 {increment}，当前下载量：{current_downloads}，用时：{time_str}")
+            else:
+                logger.info(f"插件 {plugin_name} 下载增量 {increment}，当前下载量：{current_downloads}，用时：{time_str}（通知已禁用）")
 
         except Exception as e:
             logger.error(f"发送下载增量通知时出错：{str(e)}")
@@ -277,7 +295,7 @@ class PluginHeatMonitor(_PluginBase):
             # 只返回已安装的插件
             installed_plugins = []
             for plugin in local_plugins:
-                if plugin.installed and plugin.id != self.__class__.__name__:  # 排除自己
+                if plugin.installed:  # 移除排除自己的条件
                     installed_plugins.append({
                         "id": plugin.id,
                         "name": plugin.plugin_name or plugin.id,
@@ -371,7 +389,7 @@ class PluginHeatMonitor(_PluginBase):
 
         plugin_options = []
         for plugin in local_plugins:
-            if plugin.installed and plugin.id != self.__class__.__name__:
+            if plugin.installed:  # 移除排除自己的条件
                 plugin_options.append({
                     "title": plugin.plugin_name or plugin.id,
                     "value": plugin.id
@@ -388,16 +406,25 @@ class PluginHeatMonitor(_PluginBase):
                                 {
                                     'component': 'VCol',
                                     'props': {
-                                        'cols': 12,
+                                        'cols': 12
                                     },
                                     'content': [
                                         {
-                                            'component': 'VAlert',
+                                            'component': 'VCard',
                                             'props': {
-                                                'type': 'info',
                                                 'variant': 'tonal',
-                                                'text': '监控其他插件的下载量热度，当下载增量达到设定值时发送通知。支持同时监控多个插件，为每个插件设置不同的下载增量阈值。'
-                                            }
+                                                'color': 'info'
+                                            },
+                                            'content': [
+                                                {
+                                                    'component': 'VAlert',
+                                                    'props': {
+                                                        "type": "info",
+                                                        "variant": "tonal",
+                                                        'text': '💡 使用提示：选择要监控的插件并设置下载增量，当插件下载量增长达到设定值时会发送通知。支持监控包括本插件在内的所有已安装插件。'
+                                                    }
+                                                }
+                                            ]
                                         }
                                     ]
                                 }
@@ -410,7 +437,7 @@ class PluginHeatMonitor(_PluginBase):
                                     'component': 'VCol',
                                     'props': {
                                         'cols': 12,
-                                        'md': 6
+                                        'md': 4
                                     },
                                     'content': [
                                         {
@@ -428,24 +455,56 @@ class PluginHeatMonitor(_PluginBase):
                                     'component': 'VCol',
                                     'props': {
                                         'cols': 12,
-                                        'md': 6
+                                        'md': 4
                                     },
                                     'content': [
                                         {
-                                            'component': 'VSelect',
+                                            'component': 'VSwitch',
                                             'props': {
-                                                'model': 'check_interval',
-                                                'label': '检查间隔',
-                                                'items': [
-                                                    {'title': '30分钟', 'value': 30},
-                                                    {'title': '1小时', 'value': 60},
-                                                    {'title': '2小时', 'value': 120},
-                                                    {'title': '6小时', 'value': 360},
-                                                    {'title': '12小时', 'value': 720},
-                                                    {'title': '24小时', 'value': 1440}
-                                                ],
-                                                'hint': '检查插件下载量的时间间隔',
+                                                'model': 'enable_notification',
+                                                'label': '启用通知',
+                                                'hint': '开启后达到增量时发送通知',
                                                 'persistent-hint': True
+                                            }
+                                        }
+                                    ]
+                                },
+                                {
+                                    'component': 'VCol',
+                                    'props': {
+                                        'cols': 12,
+                                        'md': 4
+                                    },
+                                    'content': [
+                                        {
+                                            'component': 'VSwitch',
+                                            'props': {
+                                                'model': 'run_once',
+                                                'label': '立即运行一次',
+                                                'hint': '保存配置后立即执行一次检查',
+                                                'persistent-hint': True,
+                                                'color': 'warning'
+                                            }
+                                        }
+                                    ]
+                                }
+                            ]
+                        },
+                        {
+                            'component': 'VRow',
+                            'content': [
+                                {
+                                    'component': 'VCol',
+                                    'props': {
+                                        'cols': 12
+                                    },
+                                    'content': [
+                                        {
+                                            'component': 'VCronField',
+                                            'props': {
+                                                'model': 'cron',
+                                                'label': '执行周期',
+                                                'placeholder': '0 0 0 ? *'
                                             }
                                         }
                                     ]
@@ -489,11 +548,13 @@ class PluginHeatMonitor(_PluginBase):
                                                                         {
                                                                             'component': 'VSelect',
                                                                             'props': {
-                                                                                'model': 'selected_plugin',
+                                                                                'model': 'selected_plugins',
                                                                                 'label': '选择要监控的插件',
                                                                                 'items': plugin_options,
-                                                                                'hint': '选择要监控下载量的插件',
+                                                                                'hint': '可选择多个插件进行监控',
                                                                                 'persistent-hint': True,
+                                                                                'multiple': True,
+                                                                                'chips': True,
                                                                                 'clearable': True
                                                                             }
                                                                         }
@@ -521,67 +582,7 @@ class PluginHeatMonitor(_PluginBase):
                                                                 }
                                                             ]
                                                         },
-                                                        {
-                                                            'component': 'VRow',
-                                                            'content': [
-                                                                {
-                                                                    'component': 'VCol',
-                                                                    'props': {
-                                                                        'cols': 12,
-                                                                    },
-                                                                    'content': [
-                                                                        {
-                                                                            'component': 'VAlert',
-                                                                            'props': {
-                                                                                'type': 'info',
-                                                                                'variant': 'tonal',
-                                                                                'text': '请在上方选择插件并设置下载增量，然后保存配置。下载增量是一个数字，表示当下载量增加达到此值时发送通知。'
-                                                                            }
-                                                                        }
-                                                                    ]
-                                                                }
-                                                            ]
-                                                        }
-                                                    ]
-                                                }
-                                            ]
-                                        }
-                                    ]
-                                }
-                            ]
-                        },
-                        {
-                            'component': 'VRow',
-                            'content': [
-                                {
-                                    'component': 'VCol',
-                                    'props': {
-                                        'cols': 12,
-                                    },
-                                    'content': [
-                                        {
-                                            'component': 'VCard',
-                                            'props': {
-                                                'variant': 'outlined'
-                                            },
-                                            'content': [
-                                                {
-                                                    'component': 'VCardTitle',
-                                                    'props': {
-                                                        'text': '当前监控列表'
-                                                    }
-                                                },
-                                                {
-                                                    'component': 'VCardText',
-                                                    'content': [
-                                                        {
-                                                            'component': 'VAlert',
-                                                            'props': {
-                                                                'type': 'info',
-                                                                'variant': 'tonal',
-                                                                'text': '当前监控的插件配置将在保存后显示在数据页面中。要修改监控配置，请重新选择插件和里程碑设置。'
-                                                            }
-                                                        }
+
                                                     ]
                                                 }
                                             ]
@@ -595,22 +596,36 @@ class PluginHeatMonitor(_PluginBase):
             ],
             {
                 "enabled": False,
-                "check_interval": 60,
+                "enable_notification": True,
+                "run_once": False,
+                "cron": "0 */1 * * *",
                 "monitored_plugins": {},
-                "selected_plugin": "",
+                "selected_plugins": [],
                 "download_increment": 100
             }
         )
 
     def get_page(self) -> List[dict]:
         """获取插件数据页面"""
+        # 如果没有监控插件，显示提示信息
+        if not self._monitored_plugins:
+            return [
+                {
+                    "component": "div",
+                    "text": "暂无监控插件，请先在配置页面添加要监控的插件",
+                    "props": {
+                        "class": "text-center pa-4",
+                    },
+                }
+            ]
+
         # 获取当前统计数据
         try:
             plugin_helper = PluginHelper()
             current_stats = plugin_helper.get_statistic()
 
-            # 构建监控插件的统计信息
-            monitor_data = []
+            # 构建表格行数据
+            table_rows = []
             for plugin_id, config in self._monitored_plugins.items():
                 # 获取历史数据
                 history_key = f"history_{plugin_id}"
@@ -635,170 +650,133 @@ class PluginHeatMonitor(_PluginBase):
                 progress = (increment_since_last / download_increment) * 100 if download_increment > 0 else 0
                 progress = min(100, max(0, progress))
 
-                # 计算平均增长速度
-                growth_rate = "暂无数据"
-                if len(notifications_sent) >= 2:
-                    total_time = notifications_sent[-1]["notification_time"] - notifications_sent[0]["notification_time"]
-                    total_increment = sum([n["increment"] for n in notifications_sent])
-                    if total_time > 0:
-                        daily_rate = total_increment / (total_time / 86400)
-                        growth_rate = f"{daily_rate:.1f} 下载/天"
-
                 # 格式化最后检查时间
                 last_check_str = "未检查"
                 if history_data.get("last_check_time"):
                     last_check_time = datetime.fromtimestamp(history_data["last_check_time"])
                     last_check_str = last_check_time.strftime("%m-%d %H:%M")
 
-                monitor_data.append({
-                    "plugin_id": plugin_id,
-                    "plugin_name": plugin_name,
-                    "current_downloads": current_downloads,
-                    "download_increment": download_increment,
-                    "increment_since_last": increment_since_last,
-                    "progress": progress,
-                    "notifications_count": len(notifications_sent),
-                    "growth_rate": growth_rate,
-                    "last_check": last_check_str
+                # 构建表格行
+                table_rows.append({
+                    "component": "tr",
+                    "content": [
+                        {
+                            "component": "td",
+                            "props": {"class": "text-start ps-4"},
+                            "text": plugin_name,
+                        },
+                        {
+                            "component": "td",
+                            "props": {"class": "text-start ps-4"},
+                            "text": f"{current_downloads:,}",
+                        },
+                        {
+                            "component": "td",
+                            "props": {"class": "text-start ps-4"},
+                            "text": str(download_increment),
+                        },
+                        {
+                            "component": "td",
+                            "props": {"class": "text-start ps-4"},
+                            "text": str(increment_since_last),
+                        },
+                        {
+                            "component": "td",
+                            "props": {"class": "text-start ps-4"},
+                            "text": f"{progress:.1f}%",
+                        },
+                        {
+                            "component": "td",
+                            "props": {"class": "text-start ps-4"},
+                            "text": str(len(notifications_sent)),
+                        },
+                        {
+                            "component": "td",
+                            "props": {"class": "text-start ps-4"},
+                            "text": last_check_str,
+                        },
+                    ],
                 })
 
         except Exception as e:
             logger.error(f"获取页面数据时出错：{str(e)}")
-            monitor_data = []
+            table_rows = []
 
+        # 构建简单的表格页面，参考契约检查插件的写法
         return [
             {
-                'component': 'VRow',
-                'content': [
+                "component": "VCol",
+                "props": {
+                    "cols": 12,
+                },
+                "content": [
                     {
-                        'component': 'VCol',
-                        'props': {
-                            'cols': 12
-                        },
-                        'content': [
+                        "component": "VTable",
+                        "props": {"hover": True},
+                        "content": [
                             {
-                                'component': 'VAlert',
-                                'props': {
-                                    'type': 'info',
-                                    'variant': 'tonal',
-                                    'title': '插件热度监控',
-                                    'text': f'当前监控 {len(self._monitored_plugins)} 个插件的下载量热度'
-                                }
-                            }
-                        ]
-                    }
-                ]
-            },
-            {
-                'component': 'VRow',
-                'content': [
-                    {
-                        'component': 'VCol',
-                        'props': {
-                            'cols': 12
-                        },
-                        'content': [
-                            {
-                                'component': 'VCard',
-                                'content': [
+                                "component": "thead",
+                                "content": [
                                     {
-                                        'component': 'VCardTitle',
-                                        'props': {
-                                            'text': '监控统计'
-                                        }
+                                        "component": "th",
+                                        "props": {"class": "text-start ps-4"},
+                                        "text": "插件名称",
                                     },
                                     {
-                                        'component': 'VCardText',
-                                        'content': [
-                                            {
-                                                'component': 'VDataTable',
-                                                'props': {
-                                                    'headers': [
-                                                        {'title': '插件名称', 'key': 'plugin_name', 'sortable': True},
-                                                        {'title': '当前下载量', 'key': 'current_downloads', 'sortable': True},
-                                                        {'title': '下载增量', 'key': 'download_increment', 'sortable': True},
-                                                        {'title': '距离通知', 'key': 'increment_since_last', 'sortable': True},
-                                                        {'title': '进度', 'key': 'progress', 'sortable': True},
-                                                        {'title': '通知次数', 'key': 'notifications_count', 'sortable': True},
-                                                        {'title': '增长速度', 'key': 'growth_rate', 'sortable': False},
-                                                        {'title': '最后检查', 'key': 'last_check', 'sortable': False}
-                                                    ],
-                                                    'items': monitor_data,
-                                                    'items-per-page': 10,
-                                                    'no-data-text': '暂无监控数据'
-                                                },
-                                                'slots': {
-                                                    'item.progress': {
-                                                        'component': 'VProgressLinear',
-                                                        'props': {
-                                                            'model-value': '{{ item.progress }}',
-                                                            'height': '8',
-                                                            'color': 'primary'
-                                                        }
-                                                    },
-                                                    'item.current_downloads': {
-                                                        'component': 'VChip',
-                                                        'props': {
-                                                            'size': 'small',
-                                                            'color': 'info',
-                                                            'text': '{{ item.current_downloads.toLocaleString() }}'
-                                                        }
-                                                    },
-                                                    'item.download_increment': {
-                                                        'component': 'VChip',
-                                                        'props': {
-                                                            'size': 'small',
-                                                            'color': 'primary',
-                                                            'text': '{{ item.download_increment }}'
-                                                        }
-                                                    },
-                                                    'item.increment_since_last': {
-                                                        'component': 'VChip',
-                                                        'props': {
-                                                            'size': 'small',
-                                                            'color': '{{ item.increment_since_last >= item.download_increment ? "success" : "warning" }}',
-                                                            'text': '{{ item.increment_since_last }}'
-                                                        }
-                                                    },
-                                                    'item.notifications_count': {
-                                                        'component': 'VChip',
-                                                        'props': {
-                                                            'size': 'small',
-                                                            'color': 'success',
-                                                            'text': '{{ item.notifications_count }}'
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ]
-                            }
-                        ]
+                                        "component": "th",
+                                        "props": {"class": "text-start ps-4"},
+                                        "text": "当前下载量",
+                                    },
+                                    {
+                                        "component": "th",
+                                        "props": {"class": "text-start ps-4"},
+                                        "text": "下载增量",
+                                    },
+                                    {
+                                        "component": "th",
+                                        "props": {"class": "text-start ps-4"},
+                                        "text": "距离通知",
+                                    },
+                                    {
+                                        "component": "th",
+                                        "props": {"class": "text-start ps-4"},
+                                        "text": "进度",
+                                    },
+                                    {
+                                        "component": "th",
+                                        "props": {"class": "text-start ps-4"},
+                                        "text": "通知次数",
+                                    },
+                                    {
+                                        "component": "th",
+                                        "props": {"class": "text-start ps-4"},
+                                        "text": "最后检查",
+                                    },
+                                ],
+                            },
+                            {"component": "tbody", "content": table_rows},
+                        ],
                     }
-                ]
-            }
-        ] if monitor_data else [
-            {
-                'component': 'VRow',
-                'content': [
-                    {
-                        'component': 'VCol',
-                        'props': {
-                            'cols': 12
-                        },
-                        'content': [
-                            {
-                                'component': 'VAlert',
-                                'props': {
-                                    'type': 'warning',
-                                    'variant': 'tonal',
-                                    'title': '暂无监控数据',
-                                    'text': '请先在配置页面添加要监控的插件'
-                                }
-                            }
-                        ]
-                    }
-                ]
+                ],
             }
         ]
+
+    def get_dashboard(self) -> Optional[Tuple[Dict[str, Any], Dict[str, Any], List[dict]]]:
+        """
+        获取插件仪表盘页面，需要返回：1、仪表板col配置字典；2、全局配置（自动刷新等）；3、仪表板页面元素配置json（含数据）
+        """
+        # 列配置
+        cols = {"cols": 12, "md": 6}
+
+        # 全局配置
+        attrs = {
+            "refresh": 30,  # 30秒自动刷新
+            "border": True,
+            "title": "插件热度监控",
+            "subtitle": "监控插件下载量增长情况"
+        }
+
+        # 直接复用get_page的逻辑，保持一致性
+        page_elements = self.get_page()
+
+        return cols, attrs, page_elements
