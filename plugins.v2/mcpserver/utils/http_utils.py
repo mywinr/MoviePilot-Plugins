@@ -2,8 +2,42 @@ import logging
 import json
 from typing import Optional, Dict, Any
 
-import httpx
-import anyio
+# 尝试导入依赖，如果失败则使用模拟对象
+HTTPX_AVAILABLE = False
+ANYIO_AVAILABLE = False
+
+try:
+    import httpx
+    HTTPX_AVAILABLE = True
+except ImportError:
+    # 创建httpx模拟对象
+    class MockHttpx:
+        class AsyncClient:
+            def __init__(self, **kwargs):
+                pass
+            async def request(self, *args, **kwargs):
+                raise RuntimeError("httpx未安装，无法发送HTTP请求")
+            async def aclose(self):
+                pass
+        class HTTPStatusError(Exception):
+            def __init__(self, message, request=None, response=None):
+                super().__init__(message)
+                self.response = response
+        class RequestError(Exception):
+            pass
+    httpx = MockHttpx()
+
+try:
+    import anyio
+    ANYIO_AVAILABLE = True
+except ImportError:
+    # 创建anyio模拟对象
+    class MockAnyio:
+        @staticmethod
+        async def sleep(seconds):
+            import asyncio
+            await asyncio.sleep(seconds)
+    anyio = MockAnyio()
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +67,7 @@ def set_moviepilot_port(port: int):
     config.set_moviepilot_port(port)
 
 
-async def get_http_client() -> httpx.AsyncClient:
+async def get_http_client():
     """获取或创建HTTP客户端"""
     global _http_client
     if _http_client is None:
@@ -75,26 +109,41 @@ async def make_request(
     Returns:
         Dict[str, Any]: API响应数据或错误信息
     """
+    logger.debug(f"[make_request] 开始处理请求")
+    logger.debug(f"[make_request] 方法: {method}")
+    logger.debug(f"[make_request] 端点: {endpoint}")
+    logger.debug(f"[make_request] 访问令牌: {'已提供' if access_token else '未提供'}")
+    logger.debug(f"[make_request] 查询参数: {params}")
+    logger.debug(f"[make_request] 表单数据: {data}")
+    logger.debug(f"[make_request] JSON数据: {json_data}")
+    logger.debug(f"[make_request] 重试次数: {retry_count}")
+    logger.debug(f"[make_request] BASE_URL: {config.BASE_URL}")
+
     # 处理认证
     headers = {}
     if access_token:
         headers["Authorization"] = f"Bearer {access_token}"
+        logger.debug(f"[make_request] 设置Authorization头")
     else:
-        logger.warning("未提供access_token，请求可能会失败")
+        logger.warning("[make_request] 未提供access_token，请求可能会失败")
 
     try:
         # 获取HTTP客户端
+        logger.debug(f"[make_request] 获取HTTP客户端...")
         client = await get_http_client()
         url = f"{config.BASE_URL.rstrip('/')}{endpoint}"
+        logger.debug(f"[make_request] 完整URL: {url}")
 
         # 记录请求信息
         logger.info(f"发送请求: {method} {url}")
+        logger.debug(f"[make_request] 请求头: {headers}")
         if params:
             logger.info(f"查询参数: {params}")
         if json_data:
             logger.info(f"请求体: {json_data}")
 
         # 发送请求
+        logger.debug(f"[make_request] 发送HTTP请求...")
         response = await client.request(
             method,
             url,
@@ -103,19 +152,35 @@ async def make_request(
             json=json_data,
             headers=headers,
         )
+
+        logger.debug(f"[make_request] 收到响应")
+        logger.debug(f"[make_request] 响应状态码: {response.status_code}")
+        logger.debug(f"[make_request] 响应头: {dict(response.headers)}")
+        logger.debug(f"[make_request] 响应内容长度: {len(response.content) if response.content else 0}")
+
         response.raise_for_status()
+        logger.debug(f"[make_request] 状态码检查通过")
 
         # 处理响应
         if not response.content:
+            logger.debug(f"[make_request] 响应内容为空，返回空字典")
             return {}
 
         content_type = response.headers.get("content-type", "")
+        logger.debug(f"[make_request] 响应内容类型: {content_type}")
+
         if "application/json" in content_type:
             try:
-                return response.json()
+                logger.debug(f"[make_request] 解析JSON响应...")
+                json_result = response.json()
+                logger.debug(f"[make_request] JSON解析成功: {json_result}")
+                return json_result
             except Exception as e:
-                logger.error(f"解析JSON响应失败: {str(e)}")
+                logger.error(f"[make_request] 解析JSON响应失败: {str(e)}")
+                logger.debug(f"[make_request] 原始响应文本: {response.text}")
                 return {"error": f"解析响应失败: {str(e)}", "content": response.text}
+
+        logger.debug(f"[make_request] 返回文本响应")
         return {"content": response.text}
 
     except httpx.HTTPStatusError as e:

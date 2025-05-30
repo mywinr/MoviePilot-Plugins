@@ -161,6 +161,49 @@
               ></v-switch>
             </v-col>
           </v-row>
+
+          <!-- 插件工具配置区域 -->
+          <div class="text-subtitle-1 font-weight-bold mt-4 mb-2">插件工具配置</div>
+          <v-row>
+            <v-col cols="12">
+              <v-switch
+                v-model="config.enable_plugin_tools"
+                label="启用插件工具"
+                color="primary"
+                inset
+                hint="允许其他插件向MCP Server注册自定义工具"
+                persistent-hint
+              ></v-switch>
+            </v-col>
+          </v-row>
+          <v-row v-if="config.enable_plugin_tools">
+            <v-col cols="12" md="6">
+              <v-text-field
+                v-model="config.plugin_tool_timeout"
+                label="工具执行超时时间(秒)"
+                variant="outlined"
+                type="number"
+                min="5"
+                max="300"
+                hint="插件工具执行的最大超时时间"
+                persistent-hint
+                :rules="[v => !!v || '超时时间不能为空', v => (parseInt(v) >= 5 && parseInt(v) <= 300) || '超时时间必须在5-300秒之间']"
+              ></v-text-field>
+            </v-col>
+            <v-col cols="12" md="6">
+              <v-text-field
+                v-model="config.max_plugin_tools"
+                label="最大工具数量"
+                variant="outlined"
+                type="number"
+                min="10"
+                max="1000"
+                hint="允许注册的最大插件工具数量"
+                persistent-hint
+                :rules="[v => !!v || '最大工具数量不能为空', v => (parseInt(v) >= 10 && parseInt(v) <= 1000) || '最大工具数量必须在10-1000之间']"
+              ></v-text-field>
+            </v-col>
+          </v-row>
         </v-form>
       </v-card-text>
       <v-card-actions>
@@ -234,6 +277,9 @@ const defaultConfig = {
   mp_password: '',
   dashboard_refresh_interval: 30, // 默认30秒
   dashboard_auto_refresh: true,   // 默认启用自动刷新
+  enable_plugin_tools: true,      // 默认启用插件工具
+  plugin_tool_timeout: 30,        // 默认30秒超时
+  max_plugin_tools: 100,          // 默认最大100个工具
 }
 
 // 记录原始启用状态
@@ -290,6 +336,17 @@ onMounted(() => {
       if ('server_type' in props.initialConfig.config) {
         config.server_type = props.initialConfig.config.server_type
       }
+
+      // 处理插件工具配置
+      if ('enable_plugin_tools' in props.initialConfig.config) {
+        config.enable_plugin_tools = props.initialConfig.config.enable_plugin_tools
+      }
+      if ('plugin_tool_timeout' in props.initialConfig.config) {
+        config.plugin_tool_timeout = props.initialConfig.config.plugin_tool_timeout
+      }
+      if ('max_plugin_tools' in props.initialConfig.config) {
+        config.max_plugin_tools = props.initialConfig.config.max_plugin_tools
+      }
     }
 
     console.log('处理后的配置:', config)
@@ -324,7 +381,10 @@ async function saveConfig() {
         mp_username: config.mp_username,
         mp_password: config.mp_password,
         dashboard_refresh_interval: config.dashboard_refresh_interval,
-        dashboard_auto_refresh: config.dashboard_auto_refresh
+        dashboard_auto_refresh: config.dashboard_auto_refresh,
+        enable_plugin_tools: config.enable_plugin_tools,
+        plugin_tool_timeout: config.plugin_tool_timeout,
+        max_plugin_tools: config.max_plugin_tools,
       }
     }
     console.log('保存配置:', configToSave)

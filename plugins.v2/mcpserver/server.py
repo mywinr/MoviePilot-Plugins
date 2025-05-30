@@ -57,6 +57,173 @@ from prompts import PromptManager
 # 导入共享的认证模块
 from auth import BearerAuthMiddleware, create_token_manager
 
+def _start_plugin_tool_monitor(tool_manager):
+    """启动插件工具监控线程"""
+    import threading
+    import time
+    import json
+    import os
+
+    def monitor_plugin_tools():
+        """监控插件工具文件变化"""
+        tools_file = os.path.join(os.path.dirname(__file__), "plugin_tools.json")
+        last_modified = 0
+
+        while True:
+            try:
+                if os.path.exists(tools_file):
+                    current_modified = os.path.getmtime(tools_file)
+
+                    if current_modified > last_modified:
+                        last_modified = current_modified
+
+                        # 读取工具文件
+                        try:
+                            # 导入安全文件操作工具
+                            import sys
+                            import os
+                            sys.path.append(os.path.dirname(__file__))
+                            from utils.file_operations import safe_read_json
+                            from pathlib import Path
+
+                            plugin_tools = safe_read_json(Path(tools_file), default_value={})
+
+                            # 更新工具管理器
+                            _update_plugin_tools(tool_manager, plugin_tools)
+
+                        except Exception as e:
+                            logger.error(f"读取插件工具文件失败: {str(e)}")
+
+                time.sleep(5)  # 每5秒检查一次
+
+            except Exception as e:
+                logger.error(f"监控插件工具文件时发生异常: {str(e)}")
+                time.sleep(10)  # 出错时等待更长时间
+
+    # 启动监控线程
+    monitor_thread = threading.Thread(target=monitor_plugin_tools, daemon=True)
+    monitor_thread.start()
+    logger.info("插件工具监控线程已启动")
+
+
+def _start_plugin_prompt_monitor(prompt_manager):
+    """启动插件提示监控线程"""
+    import threading
+    import time
+    import json
+    import os
+
+    def monitor_plugin_prompts():
+        """监控插件提示文件变化"""
+        prompts_file = os.path.join(os.path.dirname(__file__), "plugin_prompts.json")
+        last_modified = 0
+
+        while True:
+            try:
+                # 检查文件是否存在且有修改
+                if os.path.exists(prompts_file):
+                    current_modified = os.path.getmtime(prompts_file)
+                    if current_modified > last_modified:
+                        last_modified = current_modified
+                        logger.info("检测到插件提示文件变化，正在更新...")
+
+                        # 读取提示文件
+                        # 导入安全文件操作工具
+                        import sys
+                        import os
+                        sys.path.append(os.path.dirname(__file__))
+                        from utils.file_operations import safe_read_json
+                        from pathlib import Path
+
+                        plugin_prompts = safe_read_json(Path(prompts_file), default_value={})
+
+                        # 更新插件提示
+                        _update_plugin_prompts(prompt_manager, plugin_prompts)
+
+                # 每5秒检查一次
+                time.sleep(5)
+
+            except Exception as e:
+                logger.error(f"监控插件提示文件时发生异常: {str(e)}")
+                time.sleep(10)  # 出错时等待更长时间
+
+    # 启动监控线程
+    monitor_thread = threading.Thread(target=monitor_plugin_prompts, daemon=True)
+    monitor_thread.start()
+    logger.info("插件提示监控线程已启动")
+
+
+def _update_plugin_prompts(prompt_manager, plugin_prompts):
+    """更新插件提示"""
+    try:
+        # 获取当前已注册的插件提示统计
+        current_stats = prompt_manager.get_plugin_prompt_registry().get_registry_stats()
+        current_plugins = set(current_stats.get("prompts_by_plugin", {}).keys())
+
+        # 获取新的插件列表
+        new_plugins = set(plugin_prompts.keys())
+
+        # 找出需要注销的插件（在当前注册中但不在新列表中）
+        plugins_to_unregister = current_plugins - new_plugins
+        for plugin_id in plugins_to_unregister:
+            result = prompt_manager.unregister_plugin_prompts(plugin_id)
+            logger.info(f"注销插件提示: {plugin_id}, 结果: {result}")
+
+        # 注册或更新插件提示
+        for plugin_id, plugin_data in plugin_prompts.items():
+            prompts = plugin_data.get("prompts", [])
+            if prompts:
+                # 先注销现有提示（如果存在）
+                if plugin_id in current_plugins:
+                    prompt_manager.unregister_plugin_prompts(plugin_id)
+
+                # 注册新提示
+                result = prompt_manager.register_plugin_prompts(plugin_id, prompts)
+                logger.info(f"注册插件提示: {plugin_id}, 结果: {result}")
+
+        # 记录最新统计
+        updated_stats = prompt_manager.get_plugin_prompt_registry().get_registry_stats()
+        logger.info(f"插件提示更新完成: {updated_stats}")
+
+    except Exception as e:
+        logger.error(f"更新插件提示时发生异常: {str(e)}")
+
+def _update_plugin_tools(tool_manager, plugin_tools):
+    """更新插件工具"""
+    try:
+        # 获取当前已注册的插件工具统计
+        current_stats = tool_manager.get_plugin_registry_stats()
+        current_plugins = set(current_stats.get("tools_by_plugin", {}).keys())
+
+        # 获取新的插件列表
+        new_plugins = set(plugin_tools.keys())
+
+        # 找出需要注销的插件（在当前注册中但不在新列表中）
+        plugins_to_unregister = current_plugins - new_plugins
+        for plugin_id in plugins_to_unregister:
+            result = tool_manager.unregister_plugin_tools(plugin_id)
+            logger.info(f"注销插件工具: {plugin_id}, 结果: {result}")
+
+        # 注册或更新插件工具
+        for plugin_id, plugin_data in plugin_tools.items():
+            tools = plugin_data.get("tools", [])
+            if tools:
+                # 先注销现有工具（如果存在）
+                if plugin_id in current_plugins:
+                    tool_manager.unregister_plugin_tools(plugin_id)
+
+                # 注册新工具
+                result = tool_manager.register_plugin_tools(plugin_id, tools)
+                logger.info(f"注册插件工具: {plugin_id}, 结果: {result}")
+
+        # 记录最新统计
+        updated_stats = tool_manager.get_plugin_registry_stats()
+        logger.info(f"插件工具更新完成: {updated_stats}")
+
+    except Exception as e:
+        logger.error(f"更新插件工具时发生异常: {str(e)}")
+        logger.error(traceback.format_exc())
+
 @click.command()
 @click.option("--host", default="127.0.0.1", help="Host address to listen on")
 @click.option("--port", default=3111, help="Port to listen on for HTTP")
@@ -149,8 +316,14 @@ def main(
     # 初始化工具管理器
     tool_manager = ToolManager(token_manager)
 
+    # 启动插件工具监控
+    _start_plugin_tool_monitor(tool_manager)
+
     # 初始化提示管理器
     prompt_manager = PromptManager(token_manager)
+
+    # 启动插件提示监控
+    _start_plugin_prompt_monitor(prompt_manager)
 
     @app.call_tool()
     async def call_tool(

@@ -19,7 +19,31 @@ class PTStatsTool(BaseTool):
     
     def __init__(self, token_manager=None):
         super().__init__(token_manager)
-        self.db_path =  "/config/user.db"
+        # 数据库路径 - 自动检测生产环境或开发环境
+        self.db_path = self._get_database_path()
+
+    def _get_database_path(self) -> str:
+        """自动检测数据库路径"""
+        # 生产环境路径
+        production_path = "/config/user.db"
+
+        # 开发环境路径
+        dev_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "user.db"
+        )
+
+        # 优先使用生产环境路径
+        if os.path.exists(production_path):
+            logger.info(f"使用生产环境数据库: {production_path}")
+            return production_path
+        elif os.path.exists(dev_path):
+            logger.info(f"使用开发环境数据库: {dev_path}")
+            return dev_path
+        else:
+            # 如果都不存在，返回生产环境路径（让后续错误处理来处理）
+            logger.warning(f"数据库文件不存在，将尝试使用: {production_path}")
+            return production_path
 
     def _get_db_connection(self):
         """获取数据库连接"""
@@ -175,6 +199,7 @@ class PTStatsTool(BaseTool):
 
         text = f"""🎯 {site_data['site_name']} 站点详细数据
 
+🌐 站点域名: {site_data['domain']}
 ✨ 魔力值: {site_data['bonus']:,.2f}
 🌱 做种数: {site_data['seeding_count']}个
 💾 做种体积: {seeding_size_str}

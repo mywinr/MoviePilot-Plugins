@@ -18,6 +18,8 @@ from app.utils.singleton import SingletonClass
 from app.log import logger
 from app.plugins import _PluginBase
 from app.core.config import settings
+from app.core.event import eventmanager, Event
+from app.schemas.types import EventType
 from app.helper.downloader import DownloaderHelper
 from app.helper.directory import DirectoryHelper
 
@@ -639,6 +641,9 @@ class MCPServer(_PluginBase, metaclass=SingletonClass):
         "auth_token": "",
         "mp_username": "admin",
         "mp_password": "",
+        "enable_plugin_tools": True,
+        "plugin_tool_timeout": 30,
+        "max_plugin_tools": 100,
     }
 
     _venv_path = None
@@ -1883,3 +1888,251 @@ class MCPServer(_PluginBase, metaclass=SingletonClass):
             },
             None,
         )
+
+    @eventmanager.register(EventType.PluginAction)
+    def handle_plugin_action(self, event: Event):
+        """处理插件动作事件，包括MCP工具注册"""
+        logger.info(f"收到插件动作事件: {event.event_data}")
+        try:
+            action = event.event_data.get("action")
+            if not action:
+                return
+
+            if action == "mcp_tool_register":
+                self._handle_tool_register(event)
+            elif action == "mcp_tool_unregister":
+                self._handle_tool_unregister(event)
+            elif action == "mcp_tool_update":
+                self._handle_tool_update(event)
+            elif action == "mcp_prompt_register":
+                self._handle_prompt_register(event)
+            elif action == "mcp_prompt_unregister":
+                self._handle_prompt_unregister(event)
+            elif action == "mcp_prompt_update":
+                self._handle_prompt_update(event)
+
+        except Exception as e:
+            logger.error(f"处理插件动作事件失败: {str(e)}")
+            logger.error(traceback.format_exc())
+
+    def _handle_tool_register(self, event: Event):
+        """处理工具注册事件"""
+        try:
+            plugin_id = event.event_data.get("plugin_id")
+            tools = event.event_data.get("tools", [])
+
+            if not plugin_id or not tools:
+                logger.warning("工具注册事件数据不完整")
+                return
+
+            logger.info(f"收到插件工具注册请求: {plugin_id}, 工具数量: {len(tools)}")
+
+            # 这里需要通知MCP Server进程注册工具
+            # 由于MCP Server运行在独立进程中，我们需要通过某种方式通知它
+            # 可以考虑使用文件、数据库或API的方式
+            self._notify_mcp_server_tool_register(plugin_id, tools)
+
+        except Exception as e:
+            logger.error(f"处理工具注册事件失败: {str(e)}")
+            logger.error(traceback.format_exc())
+
+    def _handle_tool_unregister(self, event: Event):
+        """处理工具注销事件"""
+        try:
+            plugin_id = event.event_data.get("plugin_id")
+
+            if not plugin_id:
+                logger.warning("工具注销事件数据不完整")
+                return
+
+            logger.info(f"收到插件工具注销请求: {plugin_id}")
+
+            # 通知MCP Server进程注销工具
+            self._notify_mcp_server_tool_unregister(plugin_id)
+
+        except Exception as e:
+            logger.error(f"处理工具注销事件失败: {str(e)}")
+            logger.error(traceback.format_exc())
+
+    def _handle_tool_update(self, event: Event):
+        """处理工具更新事件"""
+        try:
+            plugin_id = event.event_data.get("plugin_id")
+            tools = event.event_data.get("tools", [])
+
+            if not plugin_id or not tools:
+                logger.warning("工具更新事件数据不完整")
+                return
+
+            logger.info(f"收到插件工具更新请求: {plugin_id}, 工具数量: {len(tools)}")
+
+            # 先注销旧工具，再注册新工具
+            self._notify_mcp_server_tool_unregister(plugin_id)
+            self._notify_mcp_server_tool_register(plugin_id, tools)
+
+        except Exception as e:
+            logger.error(f"处理工具更新事件失败: {str(e)}")
+            logger.error(traceback.format_exc())
+
+    def _notify_mcp_server_tool_register(self, plugin_id: str, tools: list):
+        """通知MCP Server进程注册工具"""
+        try:
+            # 导入安全文件操作工具
+            from .utils.file_operations import atomic_update_json
+
+            # 将工具注册信息保存到文件，MCP Server进程会定期检查
+            tools_file = self._plugin_dir / "plugin_tools.json"
+
+            def update_tools(existing_tools):
+                """更新工具信息的函数"""
+                existing_tools[plugin_id] = {
+                    "tools": tools,
+                    "registered_at": time.time()
+                }
+                return existing_tools
+
+            # 使用原子操作更新文件
+            if atomic_update_json(tools_file, update_tools, default_value={}):
+                logger.info(f"已安全保存插件工具注册信息: {plugin_id}")
+            else:
+                logger.error(f"保存插件工具注册信息失败: {plugin_id}")
+
+        except Exception as e:
+            logger.error(f"通知MCP Server注册工具失败: {str(e)}")
+            logger.error(traceback.format_exc())
+
+    def _notify_mcp_server_tool_unregister(self, plugin_id: str):
+        """通知MCP Server进程注销工具"""
+        try:
+            # 导入安全文件操作工具
+            from .utils.file_operations import atomic_update_json
+
+            # 从工具文件中移除插件工具信息
+            tools_file = self._plugin_dir / "plugin_tools.json"
+
+            def remove_plugin_tools(existing_tools):
+                """移除插件工具信息的函数"""
+                if plugin_id in existing_tools:
+                    del existing_tools[plugin_id]
+                    logger.info(f"已移除插件工具注册信息: {plugin_id}")
+                else:
+                    logger.debug(f"插件工具信息不存在: {plugin_id}")
+                return existing_tools
+
+            # 使用原子操作更新文件
+            if not atomic_update_json(tools_file, remove_plugin_tools, default_value={}):
+                logger.error(f"移除插件工具注册信息失败: {plugin_id}")
+
+        except Exception as e:
+            logger.error(f"通知MCP Server注销工具失败: {str(e)}")
+            logger.error(traceback.format_exc())
+
+    def _handle_prompt_register(self, event: Event):
+        """处理提示注册事件"""
+        try:
+            plugin_id = event.event_data.get("plugin_id")
+            prompts = event.event_data.get("prompts", [])
+
+            if not plugin_id or not prompts:
+                logger.warning("提示注册事件数据不完整")
+                return
+
+            logger.info(f"收到插件提示注册请求: {plugin_id}, 提示数量: {len(prompts)}")
+
+            # 通知MCP Server进程注册提示
+            self._notify_mcp_server_prompt_register(plugin_id, prompts)
+
+        except Exception as e:
+            logger.error(f"处理提示注册事件失败: {str(e)}")
+            logger.error(traceback.format_exc())
+
+    def _handle_prompt_unregister(self, event: Event):
+        """处理提示注销事件"""
+        try:
+            plugin_id = event.event_data.get("plugin_id")
+
+            if not plugin_id:
+                logger.warning("提示注销事件数据不完整")
+                return
+
+            logger.info(f"收到插件提示注销请求: {plugin_id}")
+
+            # 通知MCP Server进程注销提示
+            self._notify_mcp_server_prompt_unregister(plugin_id)
+
+        except Exception as e:
+            logger.error(f"处理提示注销事件失败: {str(e)}")
+            logger.error(traceback.format_exc())
+
+    def _handle_prompt_update(self, event: Event):
+        """处理提示更新事件"""
+        try:
+            plugin_id = event.event_data.get("plugin_id")
+            prompts = event.event_data.get("prompts", [])
+
+            if not plugin_id or not prompts:
+                logger.warning("提示更新事件数据不完整")
+                return
+
+            logger.info(f"收到插件提示更新请求: {plugin_id}, 提示数量: {len(prompts)}")
+
+            # 先注销旧提示，再注册新提示
+            self._notify_mcp_server_prompt_unregister(plugin_id)
+            self._notify_mcp_server_prompt_register(plugin_id, prompts)
+
+        except Exception as e:
+            logger.error(f"处理提示更新事件失败: {str(e)}")
+            logger.error(traceback.format_exc())
+
+    def _notify_mcp_server_prompt_register(self, plugin_id: str, prompts: list):
+        """通知MCP Server进程注册提示"""
+        try:
+            # 导入安全文件操作工具
+            from .utils.file_operations import atomic_update_json
+
+            # 将提示注册信息保存到文件，MCP Server进程会定期检查
+            prompts_file = self._plugin_dir / "plugin_prompts.json"
+
+            def update_prompts(existing_prompts):
+                """更新提示信息的函数"""
+                existing_prompts[plugin_id] = {
+                    "prompts": prompts,
+                    "registered_at": time.time()
+                }
+                return existing_prompts
+
+            # 使用原子操作更新文件
+            if atomic_update_json(prompts_file, update_prompts, default_value={}):
+                logger.info(f"已安全保存插件提示注册信息: {plugin_id}")
+            else:
+                logger.error(f"保存插件提示注册信息失败: {plugin_id}")
+
+        except Exception as e:
+            logger.error(f"通知MCP Server注册提示失败: {str(e)}")
+            logger.error(traceback.format_exc())
+
+    def _notify_mcp_server_prompt_unregister(self, plugin_id: str):
+        """通知MCP Server进程注销提示"""
+        try:
+            # 导入安全文件操作工具
+            from .utils.file_operations import atomic_update_json
+
+            # 从提示文件中移除插件提示信息
+            prompts_file = self._plugin_dir / "plugin_prompts.json"
+
+            def remove_plugin_prompts(existing_prompts):
+                """移除插件提示信息的函数"""
+                if plugin_id in existing_prompts:
+                    del existing_prompts[plugin_id]
+                    logger.info(f"已移除插件提示注册信息: {plugin_id}")
+                else:
+                    logger.debug(f"插件提示信息不存在: {plugin_id}")
+                return existing_prompts
+
+            # 使用原子操作更新文件
+            if not atomic_update_json(prompts_file, remove_plugin_prompts, default_value={}):
+                logger.error(f"移除插件提示注册信息失败: {plugin_id}")
+
+        except Exception as e:
+            logger.error(f"通知MCP Server注销提示失败: {str(e)}")
+            logger.error(traceback.format_exc())
