@@ -2,9 +2,8 @@
 插件热度监控插件
 监控其他插件的下载量热度，当达到设定的里程碑时发送通知
 """
-import json
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
 from threading import Lock
 
@@ -22,7 +21,7 @@ class PluginHeatMonitor(_PluginBase):
     plugin_name = "插件热度监控"
     plugin_desc = "监控已安装的下载量热度"
     plugin_icon = "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/heatmonitor.png"
-    plugin_version = "1.1"
+    plugin_version = "1.2"
     plugin_author = "DzAvril"
     author_url = "https://github.com/DzAvril"
     plugin_config_prefix = "pluginheatmonitor_"
@@ -51,12 +50,32 @@ class PluginHeatMonitor(_PluginBase):
             selected_plugins = config.get("selected_plugins", [])
             download_increment = config.get("download_increment")
 
-            if selected_plugins and download_increment:
+            # 如果有选中的插件列表（无论是否为空），都需要更新监控配置
+            if "selected_plugins" in config:
                 # 解析下载增量设置
                 try:
-                    increment_value = int(download_increment)
+                    # 如果没有设置下载增量，使用默认值100
+                    if download_increment:
+                        increment_value = int(download_increment)
+                    else:
+                        # 如果没有设置增量，尝试从现有配置中获取，否则使用默认值
+                        existing_increments = [cfg.get("download_increment", 100) for cfg in self._monitored_plugins.values()]
+                        increment_value = existing_increments[0] if existing_increments else 100
+
                     if increment_value > 0:
-                        # 为每个选中的插件添加监控
+                        # 获取当前监控的插件列表，用于清理不再监控的插件
+                        old_monitored_plugins = set(self._monitored_plugins.keys())
+                        new_monitored_plugins = set(selected_plugins)
+
+                        # 清理不再监控的插件的历史数据
+                        removed_plugins = old_monitored_plugins - new_monitored_plugins
+                        for plugin_id in removed_plugins:
+                            history_key = f"history_{plugin_id}"
+                            self.del_data(history_key)
+                            logger.info(f"清理插件 {plugin_id} 的历史数据")
+
+                        # 重新构建监控插件配置（完全替换，而不是追加）
+                        self._monitored_plugins = {}
                         for plugin_id in selected_plugins:
                             self._monitored_plugins[plugin_id] = {
                                 "download_increment": increment_value
@@ -65,7 +84,7 @@ class PluginHeatMonitor(_PluginBase):
 
                         # 更新监控插件配置，但不清空用户界面的临时字段
                         # 这样用户可以继续看到刚才的选择，方便进行调整
-                        logger.info(f"成功添加 {len(selected_plugins)} 个插件到监控列表")
+                        logger.info(f"成功更新监控列表：移除 {len(removed_plugins)} 个，当前监控 {len(selected_plugins)} 个插件")
                 except ValueError as e:
                     logger.error(f"解析下载增量设置失败：{str(e)}")
 
@@ -148,7 +167,7 @@ class PluginHeatMonitor(_PluginBase):
 
             # 获取历史数据
             history_key = f"history_{plugin_id}"
-            history_data = self.plugindata.get_data(self.__class__.__name__, history_key) or {}
+            history_data = self.get_data(history_key) or {}
 
             # 获取配置
             download_increment = config.get("download_increment", 100)
@@ -164,7 +183,7 @@ class PluginHeatMonitor(_PluginBase):
                     "last_check_time": time.time(),
                     "notifications_sent": []
                 })
-                self.plugindata.save(self.__class__.__name__, history_key, history_data)
+                self.save_data(history_key, history_data)
                 logger.info(f"初始化插件 {plugin_id} 监控数据，当前下载量：{current_downloads}")
                 return
 
@@ -206,7 +225,7 @@ class PluginHeatMonitor(_PluginBase):
             })
 
             # 保存历史数据
-            self.plugindata.save(self.__class__.__name__, history_key, history_data)
+            self.save_data(history_key, history_data)
 
         except Exception as e:
             logger.error(f"检查插件 {plugin_id} 热度时出错：{str(e)}")
@@ -262,6 +281,59 @@ class PluginHeatMonitor(_PluginBase):
         else:
             days = seconds / 86400
             return f"{days:.1f}天"
+
+    def _parse_cron_interval(self, cron_expr: str) -> str:
+        """解析cron表达式获取间隔描述"""
+        try:
+            parts = cron_expr.split()
+            if len(parts) >= 5:
+                minute, hour, day, month, weekday = parts[:5]
+
+                # 检查小时字段
+                if hour.startswith("*/"):
+                    interval = int(hour[2:])
+                    return f"{interval}小时"
+                elif hour == "*":
+                    if minute.startswith("*/"):
+                        interval = int(minute[2:])
+                        return f"{interval}分钟"
+                    elif minute.isdigit():
+                        return "每小时"
+
+                # 检查天字段
+                if day.startswith("*/"):
+                    interval = int(day[2:])
+                    return f"{interval}天"
+                elif day == "*":
+                    return "每天"
+
+                # 默认返回
+                return "自定义"
+        except:
+            pass
+        return "未知"
+
+    def _get_plugin_icon(self, plugin_id: str) -> str:
+        """获取插件图标"""
+        try:
+            plugin_manager = PluginManager()
+            local_plugins = plugin_manager.get_local_plugins()
+
+            for plugin in local_plugins:
+                if plugin.id == plugin_id:
+                    if plugin.plugin_icon:
+                        # 如果是网络图片，返回原始URL
+                        if plugin.plugin_icon.startswith('http'):
+                            return plugin.plugin_icon
+                        # 如果是本地图片，返回相对路径
+                        else:
+                            return f"./plugin_icon/{plugin.plugin_icon}"
+
+            # 默认图标
+            return "mdi-puzzle"
+        except Exception as e:
+            logger.debug(f"获取插件 {plugin_id} 图标失败：{str(e)}")
+            return "mdi-puzzle"
     
     def get_command(self) -> List[Dict[str, Any]]:
         """注册插件命令"""
@@ -327,7 +399,7 @@ class PluginHeatMonitor(_PluginBase):
             for plugin_id, config in self._monitored_plugins.items():
                 # 获取历史数据
                 history_key = f"history_{plugin_id}"
-                history_data = self.plugindata.get_data(self.__class__.__name__, history_key) or {}
+                history_data = self.get_data(history_key) or {}
 
                 # 获取插件名称
                 plugin_manager = PluginManager()
@@ -611,11 +683,55 @@ class PluginHeatMonitor(_PluginBase):
         if not self._monitored_plugins:
             return [
                 {
-                    "component": "div",
-                    "text": "暂无监控插件，请先在配置页面添加要监控的插件",
-                    "props": {
-                        "class": "text-center pa-4",
-                    },
+                    "component": "VContainer",
+                    "props": {"fluid": True},
+                    "content": [
+                        {
+                            "component": "VRow",
+                            "props": {"justify": "center"},
+                            "content": [
+                                {
+                                    "component": "VCol",
+                                    "props": {"cols": 12, "md": 8},
+                                    "content": [
+                                        {
+                                            "component": "VCard",
+                                            "props": {
+                                                "variant": "tonal",
+                                                "color": "info",
+                                                "class": "text-center pa-8"
+                                            },
+                                            "content": [
+                                                {
+                                                    "component": "VIcon",
+                                                    "props": {
+                                                        "icon": "mdi-chart-line-variant",
+                                                        "size": "64",
+                                                        "color": "info",
+                                                        "class": "mb-4"
+                                                    }
+                                                },
+                                                {
+                                                    "component": "VCardTitle",
+                                                    "props": {
+                                                        "class": "text-h5 mb-2"
+                                                    },
+                                                    "text": "暂无监控插件"
+                                                },
+                                                {
+                                                    "component": "VCardText",
+                                                    "props": {
+                                                        "class": "text-body-1"
+                                                    },
+                                                    "text": "请先在配置页面添加要监控的插件，开始追踪插件下载量的增长趋势"
+                                                }
+                                            ]
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
                 }
             ]
 
@@ -624,17 +740,24 @@ class PluginHeatMonitor(_PluginBase):
             plugin_helper = PluginHelper()
             current_stats = plugin_helper.get_statistic()
 
-            # 构建表格行数据
-            table_rows = []
+            # 构建插件卡片数据
+            plugin_cards = []
+            total_downloads = 0
+
+            # 获取全局信息（所有插件共享）
+            global_last_check_time = None
+            global_download_increment = None
+
             for plugin_id, config in self._monitored_plugins.items():
                 # 获取历史数据
                 history_key = f"history_{plugin_id}"
                 history_data = self.plugindata.get_data(self.__class__.__name__, history_key) or {}
 
-                # 获取插件名称
+                # 获取插件名称和图标
                 plugin_manager = PluginManager()
                 local_plugins = plugin_manager.get_local_plugins()
                 plugin_name = plugin_id
+                plugin_icon = self._get_plugin_icon(plugin_id)
                 for plugin in local_plugins:
                     if plugin.id == plugin_id:
                         plugin_name = plugin.plugin_name or plugin_id
@@ -645,119 +768,321 @@ class PluginHeatMonitor(_PluginBase):
                 last_notification_downloads = history_data.get("last_notification_downloads", 0)
                 notifications_sent = history_data.get("notifications_sent", [])
 
+                # 收集全局信息（第一次遇到时设置）
+                if global_download_increment is None:
+                    global_download_increment = download_increment
+                if global_last_check_time is None and history_data.get("last_check_time"):
+                    from datetime import datetime
+                    last_check_time = datetime.fromtimestamp(history_data["last_check_time"])
+                    global_last_check_time = last_check_time.strftime("%Y-%m-%d %H:%M:%S")
+
                 # 计算距离下次通知的进度
                 increment_since_last = current_downloads - last_notification_downloads
                 progress = (increment_since_last / download_increment) * 100 if download_increment > 0 else 0
                 progress = min(100, max(0, progress))
 
-                # 格式化最后检查时间
-                last_check_str = "未检查"
-                if history_data.get("last_check_time"):
-                    last_check_time = datetime.fromtimestamp(history_data["last_check_time"])
-                    last_check_str = last_check_time.strftime("%m-%d %H:%M")
+                # 计算平均增长速度（基于历史通知记录）
+                avg_growth_rate = "暂无数据"
+                if len(notifications_sent) >= 2:
+                    # 计算从第一次通知到最后一次通知的时间跨度
+                    total_time = notifications_sent[-1]["notification_time"] - notifications_sent[0]["notification_time"]
+                    # 计算总增量（所有通知的增量之和）
+                    total_increment = sum([n["increment"] for n in notifications_sent])
+                    if total_time > 0:
+                        # 计算每天的平均增长速度
+                        daily_rate = total_increment / (total_time / 86400)
+                        avg_growth_rate = f"{daily_rate:.1f} 下载/天"
 
-                # 构建表格行
-                table_rows.append({
-                    "component": "tr",
+                # 确定进度条颜色
+                progress_color = "success" if progress >= 80 else "warning" if progress >= 50 else "info"
+
+                # 统计总数
+                total_downloads += current_downloads
+
+                # 构建插件卡片
+                plugin_cards.append({
+                    "component": "VCol",
+                    "props": {"cols": 12, "md": 6, "lg": 4},
                     "content": [
                         {
-                            "component": "td",
-                            "props": {"class": "text-start ps-4"},
-                            "text": plugin_name,
-                        },
-                        {
-                            "component": "td",
-                            "props": {"class": "text-start ps-4"},
-                            "text": f"{current_downloads:,}",
-                        },
-                        {
-                            "component": "td",
-                            "props": {"class": "text-start ps-4"},
-                            "text": str(download_increment),
-                        },
-                        {
-                            "component": "td",
-                            "props": {"class": "text-start ps-4"},
-                            "text": str(increment_since_last),
-                        },
-                        {
-                            "component": "td",
-                            "props": {"class": "text-start ps-4"},
-                            "text": f"{progress:.1f}%",
-                        },
-                        {
-                            "component": "td",
-                            "props": {"class": "text-start ps-4"},
-                            "text": str(len(notifications_sent)),
-                        },
-                        {
-                            "component": "td",
-                            "props": {"class": "text-start ps-4"},
-                            "text": last_check_str,
-                        },
-                    ],
+                            "component": "VCard",
+                            "props": {
+                                "variant": "outlined",
+                                "class": "h-100"
+                            },
+                            "content": [
+                                {
+                                    "component": "VCardTitle",
+                                    "props": {
+                                        "class": "d-flex align-center pa-4 pb-2"
+                                    },
+                                    "content": [
+                                        # 使用插件图标或默认图标
+                                        {
+                                            "component": "VAvatar" if not plugin_icon.startswith("mdi-") else "VIcon",
+                                            "props": {
+                                                "size": "24" if not plugin_icon.startswith("mdi-") else None,
+                                                "icon": plugin_icon if plugin_icon.startswith("mdi-") else None,
+                                                "color": "primary" if plugin_icon.startswith("mdi-") else None,
+                                                "class": "mr-2"
+                                            },
+                                            "content": [] if plugin_icon.startswith("mdi-") else [
+                                                {
+                                                    "component": "VImg",
+                                                    "props": {
+                                                        "src": plugin_icon,
+                                                        "alt": plugin_name
+                                                    }
+                                                }
+                                            ]
+                                        },
+                                        {
+                                            "component": "span",
+                                            "props": {
+                                                "class": "text-truncate"
+                                            },
+                                            "text": plugin_name
+                                        }
+                                    ]
+                                },
+                                {
+                                    "component": "VCardText",
+                                    "props": {"class": "pa-4 pt-0"},
+                                    "content": [
+                                        # 下载量统计
+                                        {
+                                            "component": "div",
+                                            "props": {"class": "mb-3"},
+                                            "content": [
+                                                {
+                                                    "component": "div",
+                                                    "props": {"class": "d-flex justify-space-between align-center mb-1"},
+                                                    "content": [
+                                                        {
+                                                            "component": "span",
+                                                            "props": {"class": "text-caption text-medium-emphasis"},
+                                                            "text": "当前下载量"
+                                                        },
+                                                        {
+                                                            "component": "span",
+                                                            "props": {"class": "text-h6 font-weight-bold"},
+                                                            "text": f"{current_downloads:,}"
+                                                        }
+                                                    ]
+                                                }
+                                            ]
+                                        },
+                                        # 达标进度条
+                                        {
+                                            "component": "div",
+                                            "props": {"class": "mb-3"},
+                                            "content": [
+                                                {
+                                                    "component": "div",
+                                                    "props": {"class": "d-flex justify-space-between align-center mb-1"},
+                                                    "content": [
+                                                        {
+                                                            "component": "span",
+                                                            "props": {"class": "text-caption text-medium-emphasis"},
+                                                            "text": "达标进度"
+                                                        },
+                                                        {
+                                                            "component": "span",
+                                                            "props": {"class": "text-caption font-weight-medium"},
+                                                            "text": f"{increment_since_last}/{download_increment}"
+                                                        }
+                                                    ]
+                                                },
+                                                {
+                                                    "component": "VProgressLinear",
+                                                    "props": {
+                                                        "model-value": progress,
+                                                        "color": progress_color,
+                                                        "height": "8",
+                                                        "rounded": True
+                                                    }
+                                                },
+                                                {
+                                                    "component": "div",
+                                                    "props": {"class": "text-center mt-1"},
+                                                    "content": [
+                                                        {
+                                                            "component": "span",
+                                                            "props": {"class": "text-caption"},
+                                                            "text": f"{progress:.1f}%"
+                                                        }
+                                                    ]
+                                                }
+                                            ]
+                                        },
+                                        # 增长速度信息 - 独占一行，居中显示
+                                        {
+                                            "component": "div",
+                                            "props": {"class": "text-center mt-2"},
+                                            "content": [
+                                                {
+                                                    "component": "VChip",
+                                                    "props": {
+                                                        "size": "small",
+                                                        "color": "info",
+                                                        "variant": "tonal",
+                                                        "prepend-icon": "mdi-trending-up"
+                                                    },
+                                                    "text": avg_growth_rate
+                                                }
+                                            ]
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
                 })
 
         except Exception as e:
             logger.error(f"获取页面数据时出错：{str(e)}")
-            table_rows = []
+            plugin_cards = []
+            total_downloads = 0
 
-        # 构建简单的表格页面，参考契约检查插件的写法
+        # 构建美化的页面布局
         return [
             {
-                "component": "VCol",
-                "props": {
-                    "cols": 12,
-                },
+                "component": "VContainer",
+                "props": {"fluid": True},
                 "content": [
+                    # 全局信息摘要 - 分散的美观卡片
                     {
-                        "component": "VTable",
-                        "props": {"hover": True},
+                        "component": "VRow",
+                        "props": {"class": "mb-4"},
                         "content": [
                             {
-                                "component": "thead",
+                                "component": "VCol",
+                                "props": {"cols": 12, "sm": 4},
                                 "content": [
                                     {
-                                        "component": "th",
-                                        "props": {"class": "text-start ps-4"},
-                                        "text": "插件名称",
-                                    },
-                                    {
-                                        "component": "th",
-                                        "props": {"class": "text-start ps-4"},
-                                        "text": "当前下载量",
-                                    },
-                                    {
-                                        "component": "th",
-                                        "props": {"class": "text-start ps-4"},
-                                        "text": "下载增量",
-                                    },
-                                    {
-                                        "component": "th",
-                                        "props": {"class": "text-start ps-4"},
-                                        "text": "距离通知",
-                                    },
-                                    {
-                                        "component": "th",
-                                        "props": {"class": "text-start ps-4"},
-                                        "text": "进度",
-                                    },
-                                    {
-                                        "component": "th",
-                                        "props": {"class": "text-start ps-4"},
-                                        "text": "通知次数",
-                                    },
-                                    {
-                                        "component": "th",
-                                        "props": {"class": "text-start ps-4"},
-                                        "text": "最后检查",
-                                    },
-                                ],
+                                        "component": "VCard",
+                                        "props": {
+                                            "variant": "tonal",
+                                            "color": "primary"
+                                        },
+                                        "content": [
+                                            {
+                                                "component": "VCardText",
+                                                "props": {"class": "text-center pa-4"},
+                                                "content": [
+                                                    {
+                                                        "component": "VIcon",
+                                                        "props": {
+                                                            "icon": "mdi-puzzle",
+                                                            "size": "32",
+                                                            "color": "primary",
+                                                            "class": "mb-2"
+                                                        }
+                                                    },
+                                                    {
+                                                        "component": "div",
+                                                        "props": {"class": "text-h4 font-weight-bold"},
+                                                        "text": str(len(self._monitored_plugins))
+                                                    },
+                                                    {
+                                                        "component": "div",
+                                                        "props": {"class": "text-subtitle-2"},
+                                                        "text": "监控插件"
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
                             },
-                            {"component": "tbody", "content": table_rows},
-                        ],
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "sm": 4},
+                                "content": [
+                                    {
+                                        "component": "VCard",
+                                        "props": {
+                                            "variant": "tonal",
+                                            "color": "success"
+                                        },
+                                        "content": [
+                                            {
+                                                "component": "VCardText",
+                                                "props": {"class": "text-center pa-4"},
+                                                "content": [
+                                                    {
+                                                        "component": "VIcon",
+                                                        "props": {
+                                                            "icon": "mdi-download",
+                                                            "size": "32",
+                                                            "color": "success",
+                                                            "class": "mb-2"
+                                                        }
+                                                    },
+                                                    {
+                                                        "component": "div",
+                                                        "props": {"class": "text-h4 font-weight-bold"},
+                                                        "text": f"{total_downloads:,}"
+                                                    },
+                                                    {
+                                                        "component": "div",
+                                                        "props": {"class": "text-subtitle-2"},
+                                                        "text": "总下载量"
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "sm": 4},
+                                "content": [
+                                    {
+                                        "component": "VCard",
+                                        "props": {
+                                            "variant": "tonal",
+                                            "color": "info"
+                                        },
+                                        "content": [
+                                            {
+                                                "component": "VCardText",
+                                                "props": {"class": "text-center pa-4"},
+                                                "content": [
+                                                    {
+                                                        "component": "VIcon",
+                                                        "props": {
+                                                            "icon": "mdi-clock-outline",
+                                                            "size": "32",
+                                                            "color": "info",
+                                                            "class": "mb-2"
+                                                        }
+                                                    },
+                                                    {
+                                                        "component": "div",
+                                                        "props": {"class": "text-h6 font-weight-bold"},
+                                                        "text": global_last_check_time or "未检查"
+                                                    },
+                                                    {
+                                                        "component": "div",
+                                                        "props": {"class": "text-subtitle-2"},
+                                                        "text": "最后检查"
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    # 插件监控卡片
+                    {
+                        "component": "VRow",
+                        "content": plugin_cards
                     }
-                ],
+                ]
             }
         ]
 
@@ -765,18 +1090,57 @@ class PluginHeatMonitor(_PluginBase):
         """
         获取插件仪表盘页面，需要返回：1、仪表板col配置字典；2、全局配置（自动刷新等）；3、仪表板页面元素配置json（含数据）
         """
-        # 列配置
-        cols = {"cols": 12, "md": 6}
+        # 列配置 - 全宽显示，与Page页面保持一致
+        cols = {"cols": 12}
 
-        # 全局配置
+        # 全局配置 - 增强视觉效果
         attrs = {
             "refresh": 30,  # 30秒自动刷新
-            "border": True,
-            "title": "插件热度监控",
-            "subtitle": "监控插件下载量增长情况"
+            "border": True,  # 启用边框以显示插件标识
+            "title": "插件热度监控",  # 插件名称
+            "subtitle": "实时监控插件下载量增长趋势",
+            "icon": "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/heatmonitor.png"  # 插件图标
         }
 
-        # 直接复用get_page的逻辑，保持一致性
+        # 直接使用 page 的 UI，提取其中的内容部分
         page_elements = self.get_page()
+        if page_elements and len(page_elements) > 0:
+            # 提取 VContainer 中的 content 部分作为 dashboard 元素
+            container = page_elements[0]
+            if container.get("component") == "VContainer" and "content" in container:
+                dashboard_elements = container["content"]
+                return cols, attrs, dashboard_elements
 
-        return cols, attrs, page_elements
+        # 如果没有监控插件或获取页面失败，显示简洁的提示
+        dashboard_elements = [
+            {
+                "component": "VCard",
+                "props": {
+                    "variant": "tonal",
+                    "color": "info",
+                    "class": "text-center pa-6"
+                },
+                "content": [
+                    {
+                        "component": "VIcon",
+                        "props": {
+                            "icon": "mdi-chart-line-variant",
+                            "size": "48",
+                            "color": "info",
+                            "class": "mb-3"
+                        }
+                    },
+                    {
+                        "component": "VCardTitle",
+                        "props": {"class": "text-h6 mb-2"},
+                        "text": "暂无监控插件"
+                    },
+                    {
+                        "component": "VCardText",
+                        "props": {"class": "text-caption"},
+                        "text": "请在配置页面添加要监控的插件"
+                    }
+                ]
+            }
+        ]
+        return cols, attrs, dashboard_elements
