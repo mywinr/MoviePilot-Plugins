@@ -64,14 +64,34 @@
         </v-col>
       </v-row>
 
-      <!-- GitHub风格热力图 -->
+      <!-- 热力图和趋势图 -->
       <v-row>
         <v-col cols="12">
           <v-card>
             <v-card-title class="d-flex align-center">
-              <v-icon class="mr-2">mdi-chart-timeline-variant</v-icon>
-              插件下载量热力图
+              <v-icon class="mr-2">{{ viewMode === 'heatmap' ? 'mdi-chart-timeline-variant' : 'mdi-chart-line' }}</v-icon>
+              {{ viewMode === 'heatmap' ? '插件下载量热力图' : '插件下载量趋势图' }}
               <v-spacer></v-spacer>
+
+              <!-- 视图切换按钮 -->
+              <v-btn-toggle
+                v-model="viewMode"
+                color="primary"
+                size="small"
+                variant="outlined"
+                mandatory
+                class="mr-2"
+              >
+                <v-btn value="heatmap" size="small">
+                  <v-icon start>mdi-chart-timeline-variant</v-icon>
+                  热力图
+                </v-btn>
+                <v-btn value="trend" size="small">
+                  <v-icon start>mdi-chart-line</v-icon>
+                  趋势图
+                </v-btn>
+              </v-btn-toggle>
+
               <v-btn
                 color="secondary"
                 variant="outlined"
@@ -94,10 +114,21 @@
               </v-btn>
             </v-card-title>
             <v-card-text>
-              <GitHubHeatmap
-                :api="api"
-                @square-clicked="handleSquareClicked"
-              />
+              <!-- 热力图视图 -->
+              <div v-if="viewMode === 'heatmap'">
+                <GitHubHeatmap
+                  :api="api"
+                  @square-clicked="handleSquareClicked"
+                />
+              </div>
+
+              <!-- 趋势图视图 -->
+              <div v-else-if="viewMode === 'trend'">
+                <TrendChart
+                  :api="api"
+                  :all-plugins-data="allPluginsData"
+                />
+              </div>
             </v-card-text>
           </v-card>
         </v-col>
@@ -116,8 +147,9 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
 import GitHubHeatmap from './GitHubHeatmap.vue'
+import TrendChart from './TrendChart.vue'
 
 const props = defineProps({
   api: {
@@ -131,12 +163,14 @@ const emit = defineEmits(['switch', 'close'])
 // 组件状态
 const loading = ref(true)
 const refreshing = ref(false)
+const viewMode = ref('heatmap') // 'heatmap' 或 'trend'
 
 // 数据
 const monitoredPlugins = ref([])
 const totalDownloads = ref(0)
 const totalGrowth = ref(0)
 const lastUpdateTime = ref('')
+const allPluginsData = ref([]) // 用于趋势图的插件数据
 
 // 提示信息
 const snackbar = reactive({
@@ -169,6 +203,7 @@ async function loadData() {
   try {
     // 获取基本数据
     const statusData = await props.api.get('plugin/PluginHeatMonitor/status')
+
     if (statusData) {
       monitoredPlugins.value = statusData.monitored_plugins || []
       totalDownloads.value = statusData.total_downloads || 0
@@ -178,11 +213,52 @@ async function loadData() {
       totalGrowth.value = statusData.total_daily_growth || 0
     }
 
+    // 获取趋势图所需的插件数据
+    await loadTrendData()
+
   } catch (error) {
-    console.error('加载数据失败:', error)
+    console.error('❌ 加载数据失败:', error)
     showMessage('加载数据失败', 'error')
   } finally {
     loading.value = false
+  }
+}
+
+async function loadTrendData() {
+  try {
+    // 获取插件列表
+    const listData = await props.api.get('plugin/PluginHeatMonitor/plugin-list')
+
+    if (listData && listData.status === 'success') {
+      const plugins = listData.plugins || []
+
+      // 为每个插件获取热力图数据（包含daily_downloads）
+      const pluginDataPromises = plugins.map(async (plugin) => {
+        try {
+          const heatmapData = await props.api.get(`plugin/PluginHeatMonitor/plugin-heatmap?plugin_id=${plugin.id}`)
+
+          if (heatmapData && heatmapData.status === 'success') {
+            // 注意：API返回的是dayData，需要转换为daily_downloads格式
+            return {
+              plugin_id: plugin.id,
+              plugin_name: plugin.name,
+              plugin_icon: plugin.icon,
+              daily_downloads: heatmapData.dayData || {}, // 这里直接使用dayData作为daily_downloads
+              current_downloads: heatmapData.current_downloads || 0
+            }
+          }
+        } catch (error) {
+          console.error(`❌ 获取插件 ${plugin.name} 数据失败:`, error)
+        }
+        return null
+      })
+
+      const results = await Promise.all(pluginDataPromises)
+      const validResults = results.filter(data => data !== null)
+      allPluginsData.value = validResults
+    }
+  } catch (error) {
+    console.error('❌ 加载趋势数据失败:', error)
   }
 }
 
@@ -197,6 +273,14 @@ async function refreshData() {
     refreshing.value = false
   }
 }
+
+// 监听视图模式变化
+watch(viewMode, async (newMode, oldMode) => {
+  if (newMode === 'trend' && allPluginsData.value.length === 0) {
+    // 如果切换到趋势图但没有数据，重新加载
+    await loadTrendData()
+  }
+})
 
 // 初始化
 onMounted(() => {

@@ -1,7 +1,7 @@
 import { importShared } from './__federation_fn_import-JrT3xvdd.js';
-import Page from './__federation_expose_Page-DRdU5H8b.js';
+import Page from './__federation_expose_Page-BwAmLIu3.js';
 import _sfc_main$1 from './__federation_expose_Config-BvKCeXbC.js';
-import Dashboard from './__federation_expose_Dashboard-BKd4lJhX.js';
+import Dashboard from './__federation_expose_Dashboard-CMrv-btz.js';
 import { p as propsFactory, i as includes, a as isOn, e as eventName, g as genericComponent, b as getCurrentInstance, c as provideTheme, d as createLayout, u as useRtl, m as makeThemeProps, f as makeLayoutProps, h as provideDefaults, j as convertToUnit, k as destructComputed, l as isCssColor, n as isParsableColor, o as parseColor, q as getForeground, r as getCurrentInstanceName, S as SUPPORTS_INTERSECTION, s as clamp, t as consoleWarn, v as useProxiedModel, w as useToggleScope, x as useLayoutItem, y as makeLayoutItemProps, z as getUid, A as deepEqual, B as wrapInArray, C as findChildrenWithProvide, D as useIcon, I as IconValue, E as flattenFragments, F as useResizeObserver, G as IN_BROWSER, H as hasEvent, J as isObject, K as keyCodes, L as useLocale, M as EventProp, N as filterInputAttrs, O as matchesSelector, P as omit, Q as only, R as useDisplay, T as useGoTo, U as makeDisplayProps, V as focusableChildren, W as consoleError, X as defineComponent, Y as deprecate, Z as getPropertyFromItem, _ as focusChild, $ as defer, a0 as templateRef, a1 as isClickInsideElement, a2 as getNextElement, a3 as pick, a4 as callEvent, a5 as debounce, a6 as ensureValidVNode, a7 as checkPrintable, a8 as noop, a9 as useTheme, aa as pickWithRest, ab as keys, ac as getEventCoordinates, ad as HexToHSV, ae as HSVtoHex, af as HSLtoHSV, ag as HSVtoHSL, ah as RGBtoHSV, ai as HSVtoRGB, aj as has, ak as getDecimals, al as createRange, am as keyValues, an as SUPPORTS_EYE_DROPPER, ao as HSVtoCSS, ap as RGBtoCSS, aq as getContrast, ar as isComposingIgnoreKey, as as getObjectValueByPath, at as isEmpty, au as defineFunctionalComponent, av as breakpoints, aw as useDate, ax as getWeek, ay as humanReadableFileSize, az as provideLocale, aA as useLayout, aB as CircularBuffer, aC as VuetifyLayoutKey, aD as refElement, aE as VClassIcon, aF as VComponentIcon, aG as VLigatureIcon, aH as VSvgIcon } from './date--mM7W7--.js';
 
 true&&(function polyfill() {
@@ -54,30 +54,90 @@ const _sfc_main = {
 
 const tab = ref$Q('page');
 
+// 生成测试用的日期数据
+function generateMockDailyData(days = 30) {
+  const data = {};
+  const today = new Date();
+
+  for (let i = days - 1; i >= 0; i--) {
+    const date = new Date(today);
+    date.setDate(date.getDate() - i);
+    const dateStr = date.toISOString().split('T')[0];
+
+    // 生成随机下载量，模拟真实的增长趋势
+    const baseValue = Math.max(0, Math.floor(Math.random() * 50) + (days - i) * 2);
+    data[dateStr] = baseValue;
+  }
+
+  return data
+}
+
 // Mock API for local development
 const mockApi = {
   get: async (url) => {
-    console.log('Mock API GET:', url);
     // 返回模拟数据
     if (url.includes('status')) {
       return {
         monitored_plugins: [
           {
-            name: 'TestPlugin',
+            plugin_name: 'TestPlugin1',
+            name: 'TestPlugin1',
             downloads: 1680,
             last_check: '2024-01-15 10:30:00',
             increment_since_last: 50,
-            download_increment: 100
+            download_increment: 100,
+            daily_downloads: generateMockDailyData(30)
+          },
+          {
+            plugin_name: 'TestPlugin2',
+            name: 'TestPlugin2',
+            downloads: 2340,
+            last_check: '2024-01-15 10:30:00',
+            increment_since_last: 30,
+            download_increment: 80,
+            daily_downloads: generateMockDailyData(25)
           }
         ],
-        total_downloads: 1680,
-        global_last_check_time: '2024-01-15 10:30:00'
+        total_downloads: 4020,
+        global_last_check_time: '2024-01-15 10:30:00',
+        day_data: generateMockDailyData(30)
+      }
+    } else if (url.includes('plugin-list')) {
+      // 插件列表 API
+      return {
+        status: 'success',
+        plugins: [
+          {
+            id: 'testplugin1',
+            name: 'TestPlugin1',
+            icon: 'https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/heatmonitor.png'
+          },
+          {
+            id: 'testplugin2',
+            name: 'TestPlugin2',
+            icon: 'https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/heatmonitor.png'
+          },
+          {
+            id: 'testplugin3',
+            name: 'TestPlugin3',
+            icon: 'https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/heatmonitor.png'
+          }
+        ]
+      }
+    } else if (url.includes('plugin-heatmap')) {
+      // 插件热力图数据 API
+      url.split('plugin_id=')[1];
+
+      return {
+        status: 'success',
+        dayData: generateMockDailyData(30),
+        current_downloads: Math.floor(Math.random() * 1000) + 500
       }
     }
+
     return {}
   },
   post: async (url, data) => {
-    console.log('Mock API POST:', url, data);
     return { success: true }
   }
 };

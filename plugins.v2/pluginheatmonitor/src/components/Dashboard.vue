@@ -189,8 +189,38 @@
             </v-alert>
           </div>
 
-          <!-- 三级热力图 -->
-          <div class="heatmap-section mb-4">
+          <!-- 视图切换按钮 -->
+          <div class="view-toggle-section mb-3">
+            <div class="d-flex align-center justify-space-between">
+              <div class="d-flex align-center">
+                <v-icon class="mr-2" color="primary">
+                  {{ viewMode === 'heatmap' ? 'mdi-chart-timeline-variant' : 'mdi-chart-line' }}
+                </v-icon>
+                <span class="text-h6">
+                  {{ viewMode === 'heatmap' ? '下载量热力图' : '下载量趋势图' }}
+                </span>
+              </div>
+              <v-btn-toggle
+                v-model="viewMode"
+                color="primary"
+                size="small"
+                variant="outlined"
+                mandatory
+              >
+                <v-btn value="heatmap" size="small">
+                  <v-icon start>mdi-chart-timeline-variant</v-icon>
+                  热力图
+                </v-btn>
+                <v-btn value="trend" size="small">
+                  <v-icon start>mdi-chart-line</v-icon>
+                  趋势图
+                </v-btn>
+              </v-btn-toggle>
+            </div>
+          </div>
+
+          <!-- 热力图视图 -->
+          <div v-if="viewMode === 'heatmap'" class="heatmap-section mb-4">
             <HeatmapLevels
               :year-data="yearData"
               :month-data="monthData"
@@ -200,6 +230,14 @@
               :selected-month="selectedMonth"
               @select-year="handleSelectYear"
               @select-month="handleSelectMonth"
+            />
+          </div>
+
+          <!-- 趋势图视图 -->
+          <div v-else-if="viewMode === 'trend'" class="trend-section mb-4">
+            <TrendChart
+              :api="api"
+              :day-data="dayData"
             />
           </div>
 
@@ -270,6 +308,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useDisplay } from 'vuetify'
 import HeatmapLevels from './HeatmapLevels.vue'
+import TrendChart from './TrendChart.vue'
 
 // 接收仪表板配置
 const props = defineProps({
@@ -303,6 +342,7 @@ const dashboardConfig = computed(() => {
 const initialLoading = ref(true)
 const refreshing = ref(false)
 const lastUpdateTime = ref('')
+const viewMode = ref('heatmap') // 'heatmap' 或 'trend'
 
 // 热力图数据
 const yearData = reactive({})
@@ -647,6 +687,27 @@ onUnmounted(() => {
   opacity: 0.6;
 }
 
+/* 视图切换样式 */
+.view-toggle-section {
+  border-bottom: 1px solid rgba(var(--v-theme-outline), 0.12);
+  padding-bottom: 12px;
+}
+
+.trend-section {
+  animation: slideInUp 0.5s ease-out;
+}
+
+@keyframes slideInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* 响应式设计 */
 @media (max-width: 600px) {
   .status-header {
@@ -655,6 +716,18 @@ onUnmounted(() => {
 
   .dashboard-main {
     padding: 0 4px;
+  }
+
+  .view-toggle-section .d-flex {
+    flex-direction: column;
+    align-items: flex-start !important;
+    gap: 12px;
+  }
+
+  .view-toggle-section .d-flex:last-child {
+    align-items: center !important;
+    width: 100%;
+    justify-content: center;
   }
 }
 

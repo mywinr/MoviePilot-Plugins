@@ -1,5 +1,5 @@
 import { importShared } from './__federation_fn_import-JrT3xvdd.js';
-import { _ as _export_sfc } from './_plugin-vue_export-helper-pcqpp-6-.js';
+import { _ as _export_sfc, T as TrendChart } from './TrendChart-DZEKiQA1.js';
 
 const {renderList:_renderList,Fragment:_Fragment,openBlock:_openBlock$1,createElementBlock:_createElementBlock$1,toDisplayString:_toDisplayString$1,createTextVNode:_createTextVNode$1,resolveComponent:_resolveComponent$1,withCtx:_withCtx$1,createVNode:_createVNode$1,normalizeClass:_normalizeClass,normalizeStyle:_normalizeStyle,createElementVNode:_createElementVNode$1} = await importShared('vue');
 
@@ -354,19 +354,30 @@ const _hoisted_24 = {
 };
 const _hoisted_25 = { class: "status-overview mb-4" };
 const _hoisted_26 = { class: "d-flex align-center justify-space-between" };
-const _hoisted_27 = { class: "heatmap-section mb-4" };
-const _hoisted_28 = {
+const _hoisted_27 = { class: "view-toggle-section mb-3" };
+const _hoisted_28 = { class: "d-flex align-center justify-space-between" };
+const _hoisted_29 = { class: "d-flex align-center" };
+const _hoisted_30 = { class: "text-h6" };
+const _hoisted_31 = {
   key: 0,
+  class: "heatmap-section mb-4"
+};
+const _hoisted_32 = {
+  key: 1,
+  class: "trend-section mb-4"
+};
+const _hoisted_33 = {
+  key: 2,
   class: "detail-section"
 };
-const _hoisted_29 = { class: "text-center" };
-const _hoisted_30 = { class: "text-h6 font-weight-bold" };
-const _hoisted_31 = { class: "text-center" };
-const _hoisted_32 = { class: "text-h6 font-weight-bold" };
-const _hoisted_33 = { class: "text-center" };
-const _hoisted_34 = { class: "text-body-1 font-weight-bold" };
-const _hoisted_35 = { class: "text-center" };
-const _hoisted_36 = { class: "text-body-2 font-weight-bold" };
+const _hoisted_34 = { class: "text-center" };
+const _hoisted_35 = { class: "text-h6 font-weight-bold" };
+const _hoisted_36 = { class: "text-center" };
+const _hoisted_37 = { class: "text-h6 font-weight-bold" };
+const _hoisted_38 = { class: "text-center" };
+const _hoisted_39 = { class: "text-body-1 font-weight-bold" };
+const _hoisted_40 = { class: "text-center" };
+const _hoisted_41 = { class: "text-body-2 font-weight-bold" };
 
 const {ref,reactive,computed,onMounted,onUnmounted} = await importShared('vue');
 
@@ -410,6 +421,7 @@ const dashboardConfig = computed(() => {
 const initialLoading = ref(true);
 const refreshing = ref(false);
 const lastUpdateTime = ref('');
+const viewMode = ref('heatmap'); // 'heatmap' 或 'trend'
 
 // 热力图数据
 const yearData = reactive({});
@@ -629,6 +641,8 @@ return (_ctx, _cache) => {
   const _component_v_card_subtitle = _resolveComponent("v-card-subtitle");
   const _component_v_card_item = _resolveComponent("v-card-item");
   const _component_v_alert = _resolveComponent("v-alert");
+  const _component_v_btn = _resolveComponent("v-btn");
+  const _component_v_btn_toggle = _resolveComponent("v-btn-toggle");
   const _component_v_col = _resolveComponent("v-col");
   const _component_v_row = _resolveComponent("v-row");
 
@@ -651,7 +665,7 @@ return (_ctx, _cache) => {
                             color: "primary",
                             size: "40"
                           }),
-                          _cache[0] || (_cache[0] = _createElementVNode("div", { class: "text-caption mt-2 text-medium-emphasis" }, "正在加载插件热度数据...", -1))
+                          _cache[1] || (_cache[1] = _createElementVNode("div", { class: "text-caption mt-2 text-medium-emphasis" }, "正在加载插件热度数据...", -1))
                         ])
                       ]))
                     : (_openBlock(), _createElementBlock("div", _hoisted_5, [
@@ -672,11 +686,11 @@ return (_ctx, _cache) => {
                                         color: "primary",
                                         size: "24"
                                       }, {
-                                        default: _withCtx(() => _cache[1] || (_cache[1] = [
+                                        default: _withCtx(() => _cache[2] || (_cache[2] = [
                                           _createTextVNode("mdi-chart-timeline-variant")
                                         ])),
                                         _: 1,
-                                        __: [1]
+                                        __: [2]
                                       })
                                     ]),
                                     _: 1
@@ -686,7 +700,7 @@ return (_ctx, _cache) => {
                               }),
                               _createElementVNode("div", null, [
                                 _createElementVNode("div", _hoisted_9, [
-                                  _cache[2] || (_cache[2] = _createTextVNode(" 插件热度监控 ")),
+                                  _cache[3] || (_cache[3] = _createTextVNode(" 插件热度监控 ")),
                                   (selectedPeriod.value)
                                     ? (_openBlock(), _createBlock(_component_v_chip, {
                                         key: 0,
@@ -759,7 +773,7 @@ return (_ctx, _cache) => {
                                     default: _withCtx(() => [
                                       _createElementVNode("div", _hoisted_14, [
                                         _createElementVNode("div", _hoisted_15, [
-                                          _cache[3] || (_cache[3] = _createElementVNode("span", { class: "text-body-2" }, "总下载量", -1)),
+                                          _cache[4] || (_cache[4] = _createElementVNode("span", { class: "text-body-2" }, "总下载量", -1)),
                                           _createVNode(_component_v_chip, {
                                             size: "small",
                                             color: "primary",
@@ -772,7 +786,7 @@ return (_ctx, _cache) => {
                                           })
                                         ]),
                                         _createElementVNode("div", _hoisted_16, [
-                                          _cache[4] || (_cache[4] = _createElementVNode("span", { class: "text-body-2" }, "增长量", -1)),
+                                          _cache[5] || (_cache[5] = _createElementVNode("span", { class: "text-body-2" }, "增长量", -1)),
                                           _createVNode(_component_v_chip, {
                                             size: "small",
                                             color: selectedPeriodData.value.growth > 0 ? 'success' : 'grey',
@@ -785,7 +799,7 @@ return (_ctx, _cache) => {
                                           }, 8, ["color"])
                                         ]),
                                         _createElementVNode("div", _hoisted_17, [
-                                          _cache[5] || (_cache[5] = _createElementVNode("span", { class: "text-body-2" }, "最后更新", -1)),
+                                          _cache[6] || (_cache[6] = _createElementVNode("span", { class: "text-body-2" }, "最后更新", -1)),
                                           _createElementVNode("span", _hoisted_18, _toDisplayString(selectedPeriodData.value.lastUpdate || '未知'), 1)
                                         ])
                                       ])
@@ -828,11 +842,11 @@ return (_ctx, _cache) => {
                               color: "primary",
                               size: "28"
                             }, {
-                              default: _withCtx(() => _cache[6] || (_cache[6] = [
+                              default: _withCtx(() => _cache[7] || (_cache[7] = [
                                 _createTextVNode("mdi-chart-timeline-variant")
                               ])),
                               _: 1,
-                              __: [6]
+                              __: [7]
                             })
                           ]),
                           _: 1
@@ -899,7 +913,7 @@ return (_ctx, _cache) => {
                           color: "primary",
                           size: "40"
                         }),
-                        _cache[7] || (_cache[7] = _createElementVNode("div", { class: "text-caption mt-2 text-medium-emphasis" }, "正在加载插件热度数据...", -1))
+                        _cache[8] || (_cache[8] = _createElementVNode("div", { class: "text-caption mt-2 text-medium-emphasis" }, "正在加载插件热度数据...", -1))
                       ])
                     ]))
                   : (_openBlock(), _createElementBlock("div", _hoisted_24, [
@@ -928,19 +942,90 @@ return (_ctx, _cache) => {
                         })
                       ]),
                       _createElementVNode("div", _hoisted_27, [
-                        _createVNode(HeatmapLevels, {
-                          "year-data": yearData,
-                          "month-data": monthData,
-                          "day-data": dayData,
-                          "live-increments": liveIncrements,
-                          "selected-year": selectedYear.value,
-                          "selected-month": selectedMonth.value,
-                          onSelectYear: handleSelectYear,
-                          onSelectMonth: handleSelectMonth
-                        }, null, 8, ["year-data", "month-data", "day-data", "live-increments", "selected-year", "selected-month"])
+                        _createElementVNode("div", _hoisted_28, [
+                          _createElementVNode("div", _hoisted_29, [
+                            _createVNode(_component_v_icon, {
+                              class: "mr-2",
+                              color: "primary"
+                            }, {
+                              default: _withCtx(() => [
+                                _createTextVNode(_toDisplayString(viewMode.value === 'heatmap' ? 'mdi-chart-timeline-variant' : 'mdi-chart-line'), 1)
+                              ]),
+                              _: 1
+                            }),
+                            _createElementVNode("span", _hoisted_30, _toDisplayString(viewMode.value === 'heatmap' ? '下载量热力图' : '下载量趋势图'), 1)
+                          ]),
+                          _createVNode(_component_v_btn_toggle, {
+                            modelValue: viewMode.value,
+                            "onUpdate:modelValue": _cache[0] || (_cache[0] = $event => ((viewMode).value = $event)),
+                            color: "primary",
+                            size: "small",
+                            variant: "outlined",
+                            mandatory: ""
+                          }, {
+                            default: _withCtx(() => [
+                              _createVNode(_component_v_btn, {
+                                value: "heatmap",
+                                size: "small"
+                              }, {
+                                default: _withCtx(() => [
+                                  _createVNode(_component_v_icon, { start: "" }, {
+                                    default: _withCtx(() => _cache[9] || (_cache[9] = [
+                                      _createTextVNode("mdi-chart-timeline-variant")
+                                    ])),
+                                    _: 1,
+                                    __: [9]
+                                  }),
+                                  _cache[10] || (_cache[10] = _createTextVNode(" 热力图 "))
+                                ]),
+                                _: 1,
+                                __: [10]
+                              }),
+                              _createVNode(_component_v_btn, {
+                                value: "trend",
+                                size: "small"
+                              }, {
+                                default: _withCtx(() => [
+                                  _createVNode(_component_v_icon, { start: "" }, {
+                                    default: _withCtx(() => _cache[11] || (_cache[11] = [
+                                      _createTextVNode("mdi-chart-line")
+                                    ])),
+                                    _: 1,
+                                    __: [11]
+                                  }),
+                                  _cache[12] || (_cache[12] = _createTextVNode(" 趋势图 "))
+                                ]),
+                                _: 1,
+                                __: [12]
+                              })
+                            ]),
+                            _: 1
+                          }, 8, ["modelValue"])
+                        ])
                       ]),
+                      (viewMode.value === 'heatmap')
+                        ? (_openBlock(), _createElementBlock("div", _hoisted_31, [
+                            _createVNode(HeatmapLevels, {
+                              "year-data": yearData,
+                              "month-data": monthData,
+                              "day-data": dayData,
+                              "live-increments": liveIncrements,
+                              "selected-year": selectedYear.value,
+                              "selected-month": selectedMonth.value,
+                              onSelectYear: handleSelectYear,
+                              onSelectMonth: handleSelectMonth
+                            }, null, 8, ["year-data", "month-data", "day-data", "live-increments", "selected-year", "selected-month"])
+                          ]))
+                        : (viewMode.value === 'trend')
+                          ? (_openBlock(), _createElementBlock("div", _hoisted_32, [
+                              _createVNode(TrendChart, {
+                                api: __props.api,
+                                "day-data": dayData
+                              }, null, 8, ["api", "day-data"])
+                            ]))
+                          : _createCommentVNode("", true),
                       (selectedPeriodData.value)
-                        ? (_openBlock(), _createElementBlock("div", _hoisted_28, [
+                        ? (_openBlock(), _createElementBlock("div", _hoisted_33, [
                             _createVNode(_component_v_card, {
                               variant: "tonal",
                               class: "detail-card"
@@ -952,11 +1037,11 @@ return (_ctx, _cache) => {
                                       class: "mr-2",
                                       size: "18"
                                     }, {
-                                      default: _withCtx(() => _cache[8] || (_cache[8] = [
+                                      default: _withCtx(() => _cache[13] || (_cache[13] = [
                                         _createTextVNode("mdi-information-outline")
                                       ])),
                                       _: 1,
-                                      __: [8]
+                                      __: [13]
                                     }),
                                     _createTextVNode(" " + _toDisplayString(selectedPeriodText.value) + "详细数据 ", 1)
                                   ]),
@@ -977,20 +1062,20 @@ return (_ctx, _cache) => {
                                               color: "primary"
                                             }, {
                                               default: _withCtx(() => [
-                                                _createElementVNode("div", _hoisted_29, [
+                                                _createElementVNode("div", _hoisted_34, [
                                                   _createVNode(_component_v_icon, {
                                                     size: "24",
                                                     class: "mb-2",
                                                     color: "primary"
                                                   }, {
-                                                    default: _withCtx(() => _cache[9] || (_cache[9] = [
+                                                    default: _withCtx(() => _cache[14] || (_cache[14] = [
                                                       _createTextVNode("mdi-download")
                                                     ])),
                                                     _: 1,
-                                                    __: [9]
+                                                    __: [14]
                                                   }),
-                                                  _createElementVNode("div", _hoisted_30, _toDisplayString(selectedPeriodData.value.downloads?.toLocaleString() || 0), 1),
-                                                  _cache[10] || (_cache[10] = _createElementVNode("div", { class: "text-caption text-medium-emphasis" }, "总下载量", -1))
+                                                  _createElementVNode("div", _hoisted_35, _toDisplayString(selectedPeriodData.value.downloads?.toLocaleString() || 0), 1),
+                                                  _cache[15] || (_cache[15] = _createElementVNode("div", { class: "text-caption text-medium-emphasis" }, "总下载量", -1))
                                                 ])
                                               ]),
                                               _: 1
@@ -1009,20 +1094,20 @@ return (_ctx, _cache) => {
                                               color: "success"
                                             }, {
                                               default: _withCtx(() => [
-                                                _createElementVNode("div", _hoisted_31, [
+                                                _createElementVNode("div", _hoisted_36, [
                                                   _createVNode(_component_v_icon, {
                                                     size: "24",
                                                     class: "mb-2",
                                                     color: "success"
                                                   }, {
-                                                    default: _withCtx(() => _cache[11] || (_cache[11] = [
+                                                    default: _withCtx(() => _cache[16] || (_cache[16] = [
                                                       _createTextVNode("mdi-trending-up")
                                                     ])),
                                                     _: 1,
-                                                    __: [11]
+                                                    __: [16]
                                                   }),
-                                                  _createElementVNode("div", _hoisted_32, " +" + _toDisplayString(selectedPeriodData.value.growth?.toLocaleString() || 0), 1),
-                                                  _cache[12] || (_cache[12] = _createElementVNode("div", { class: "text-caption text-medium-emphasis" }, "增长量", -1))
+                                                  _createElementVNode("div", _hoisted_37, " +" + _toDisplayString(selectedPeriodData.value.growth?.toLocaleString() || 0), 1),
+                                                  _cache[17] || (_cache[17] = _createElementVNode("div", { class: "text-caption text-medium-emphasis" }, "增长量", -1))
                                                 ])
                                               ]),
                                               _: 1
@@ -1041,20 +1126,20 @@ return (_ctx, _cache) => {
                                               color: "info"
                                             }, {
                                               default: _withCtx(() => [
-                                                _createElementVNode("div", _hoisted_33, [
+                                                _createElementVNode("div", _hoisted_38, [
                                                   _createVNode(_component_v_icon, {
                                                     size: "24",
                                                     class: "mb-2",
                                                     color: "info"
                                                   }, {
-                                                    default: _withCtx(() => _cache[13] || (_cache[13] = [
+                                                    default: _withCtx(() => _cache[18] || (_cache[18] = [
                                                       _createTextVNode("mdi-calendar")
                                                     ])),
                                                     _: 1,
-                                                    __: [13]
+                                                    __: [18]
                                                   }),
-                                                  _createElementVNode("div", _hoisted_34, _toDisplayString(selectedPeriodData.value.period || '未知'), 1),
-                                                  _cache[14] || (_cache[14] = _createElementVNode("div", { class: "text-caption text-medium-emphasis" }, "时间段", -1))
+                                                  _createElementVNode("div", _hoisted_39, _toDisplayString(selectedPeriodData.value.period || '未知'), 1),
+                                                  _cache[19] || (_cache[19] = _createElementVNode("div", { class: "text-caption text-medium-emphasis" }, "时间段", -1))
                                                 ])
                                               ]),
                                               _: 1
@@ -1073,20 +1158,20 @@ return (_ctx, _cache) => {
                                               color: "warning"
                                             }, {
                                               default: _withCtx(() => [
-                                                _createElementVNode("div", _hoisted_35, [
+                                                _createElementVNode("div", _hoisted_40, [
                                                   _createVNode(_component_v_icon, {
                                                     size: "24",
                                                     class: "mb-2",
                                                     color: "warning"
                                                   }, {
-                                                    default: _withCtx(() => _cache[15] || (_cache[15] = [
+                                                    default: _withCtx(() => _cache[20] || (_cache[20] = [
                                                       _createTextVNode("mdi-clock-outline")
                                                     ])),
                                                     _: 1,
-                                                    __: [15]
+                                                    __: [20]
                                                   }),
-                                                  _createElementVNode("div", _hoisted_36, _toDisplayString(selectedPeriodData.value.lastUpdate || '未知'), 1),
-                                                  _cache[16] || (_cache[16] = _createElementVNode("div", { class: "text-caption text-medium-emphasis" }, "最后更新", -1))
+                                                  _createElementVNode("div", _hoisted_41, _toDisplayString(selectedPeriodData.value.lastUpdate || '未知'), 1),
+                                                  _cache[21] || (_cache[21] = _createElementVNode("div", { class: "text-caption text-medium-emphasis" }, "最后更新", -1))
                                                 ])
                                               ]),
                                               _: 1
@@ -1117,6 +1202,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const Dashboard = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-51b65b98"]]);
+const Dashboard = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-13c8218f"]]);
 
 export { Dashboard as default };

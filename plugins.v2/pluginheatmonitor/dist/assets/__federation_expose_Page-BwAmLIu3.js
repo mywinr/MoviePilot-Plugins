@@ -1,5 +1,5 @@
 import { importShared } from './__federation_fn_import-JrT3xvdd.js';
-import { _ as _export_sfc } from './_plugin-vue_export-helper-pcqpp-6-.js';
+import { _ as _export_sfc, T as TrendChart } from './TrendChart-DZEKiQA1.js';
 
 const {renderList:_renderList,Fragment:_Fragment,openBlock:_openBlock$1,createElementBlock:_createElementBlock$1,toDisplayString:_toDisplayString$1,createTextVNode:_createTextVNode$1,resolveComponent:_resolveComponent$1,withCtx:_withCtx$1,createBlock:_createBlock$1,createVNode:_createVNode$1,createElementVNode:_createElementVNode$1,createCommentVNode:_createCommentVNode$1,normalizeStyle:_normalizeStyle,normalizeClass:_normalizeClass} = await importShared('vue');
 
@@ -15,8 +15,8 @@ const _hoisted_5$1 = { class: "d-flex align-center justify-space-between" };
 const _hoisted_6$1 = { class: "d-flex align-center" };
 const _hoisted_7$1 = { class: "text-h6 font-weight-bold" };
 const _hoisted_8$1 = { class: "text-caption text-medium-emphasis" };
-const _hoisted_9 = { class: "github-heatmap-wrapper" };
-const _hoisted_10 = { class: "month-labels" };
+const _hoisted_9$1 = { class: "github-heatmap-wrapper" };
+const _hoisted_10$1 = { class: "month-labels" };
 const _hoisted_11 = { class: "heatmap-main" };
 const _hoisted_12 = { class: "heatmap-grid" };
 const _hoisted_13 = ["onMouseenter", "onClick"];
@@ -41,7 +41,7 @@ const _hoisted_29 = {
 };
 const _hoisted_30 = { class: "text-body-2" };
 
-const {ref: ref$1,reactive: reactive$1,computed,watch,onMounted: onMounted$1,onUnmounted} = await importShared('vue');
+const {ref: ref$1,reactive: reactive$1,computed,watch: watch$1,onMounted: onMounted$1,onUnmounted} = await importShared('vue');
 
 
 
@@ -433,7 +433,7 @@ async function confirmReset() {
 }
 
 // 监听年份变化
-watch(selectedYear, () => {
+watch$1(selectedYear, () => {
   // 年份变化时不需要重新加载数据，只需要重新渲染
 });
 
@@ -563,8 +563,8 @@ return (_ctx, _cache) => {
                   }, 1032, ["onClick", "loading", "disabled"])
                 ])
               ]),
-              _createElementVNode$1("div", _hoisted_9, [
-                _createElementVNode$1("div", _hoisted_10, [
+              _createElementVNode$1("div", _hoisted_9$1, [
+                _createElementVNode$1("div", _hoisted_10$1, [
                   (_openBlock$1(true), _createElementBlock$1(_Fragment, null, _renderList(getMonthLabels(), (month, index) => {
                     return (_openBlock$1(), _createElementBlock$1("span", {
                       key: index,
@@ -809,8 +809,10 @@ const _hoisted_5 = { class: "text-h4 font-weight-bold" };
 const _hoisted_6 = { class: "text-h4 font-weight-bold" };
 const _hoisted_7 = { class: "text-h4 font-weight-bold" };
 const _hoisted_8 = { class: "text-body-1 font-weight-bold" };
+const _hoisted_9 = { key: 0 };
+const _hoisted_10 = { key: 1 };
 
-const {ref,reactive,onMounted} = await importShared('vue');
+const {ref,reactive,onMounted,watch} = await importShared('vue');
 
 
 const _sfc_main = {
@@ -831,12 +833,14 @@ const emit = __emit;
 // 组件状态
 const loading = ref(true);
 const refreshing = ref(false);
+const viewMode = ref('heatmap'); // 'heatmap' 或 'trend'
 
 // 数据
 const monitoredPlugins = ref([]);
 const totalDownloads = ref(0);
 const totalGrowth = ref(0);
 const lastUpdateTime = ref('');
+const allPluginsData = ref([]); // 用于趋势图的插件数据
 
 // 提示信息
 const snackbar = reactive({
@@ -869,6 +873,7 @@ async function loadData() {
   try {
     // 获取基本数据
     const statusData = await props.api.get('plugin/PluginHeatMonitor/status');
+
     if (statusData) {
       monitoredPlugins.value = statusData.monitored_plugins || [];
       totalDownloads.value = statusData.total_downloads || 0;
@@ -878,11 +883,52 @@ async function loadData() {
       totalGrowth.value = statusData.total_daily_growth || 0;
     }
 
+    // 获取趋势图所需的插件数据
+    await loadTrendData();
+
   } catch (error) {
-    console.error('加载数据失败:', error);
+    console.error('❌ 加载数据失败:', error);
     showMessage('加载数据失败', 'error');
   } finally {
     loading.value = false;
+  }
+}
+
+async function loadTrendData() {
+  try {
+    // 获取插件列表
+    const listData = await props.api.get('plugin/PluginHeatMonitor/plugin-list');
+
+    if (listData && listData.status === 'success') {
+      const plugins = listData.plugins || [];
+
+      // 为每个插件获取热力图数据（包含daily_downloads）
+      const pluginDataPromises = plugins.map(async (plugin) => {
+        try {
+          const heatmapData = await props.api.get(`plugin/PluginHeatMonitor/plugin-heatmap?plugin_id=${plugin.id}`);
+
+          if (heatmapData && heatmapData.status === 'success') {
+            // 注意：API返回的是dayData，需要转换为daily_downloads格式
+            return {
+              plugin_id: plugin.id,
+              plugin_name: plugin.name,
+              plugin_icon: plugin.icon,
+              daily_downloads: heatmapData.dayData || {}, // 这里直接使用dayData作为daily_downloads
+              current_downloads: heatmapData.current_downloads || 0
+            }
+          }
+        } catch (error) {
+          console.error(`❌ 获取插件 ${plugin.name} 数据失败:`, error);
+        }
+        return null
+      });
+
+      const results = await Promise.all(pluginDataPromises);
+      const validResults = results.filter(data => data !== null);
+      allPluginsData.value = validResults;
+    }
+  } catch (error) {
+    console.error('❌ 加载趋势数据失败:', error);
   }
 }
 
@@ -897,6 +943,14 @@ async function refreshData() {
     refreshing.value = false;
   }
 }
+
+// 监听视图模式变化
+watch(viewMode, async (newMode, oldMode) => {
+  if (newMode === 'trend' && allPluginsData.value.length === 0) {
+    // 如果切换到趋势图但没有数据，重新加载
+    await loadTrendData();
+  }
+});
 
 // 初始化
 onMounted(() => {
@@ -913,6 +967,7 @@ return (_ctx, _cache) => {
   const _component_v_card = _resolveComponent("v-card");
   const _component_v_spacer = _resolveComponent("v-spacer");
   const _component_v_btn = _resolveComponent("v-btn");
+  const _component_v_btn_toggle = _resolveComponent("v-btn-toggle");
   const _component_v_card_title = _resolveComponent("v-card-title");
   const _component_v_card_text = _resolveComponent("v-card-text");
   const _component_v_snackbar = _resolveComponent("v-snackbar");
@@ -939,11 +994,11 @@ return (_ctx, _cache) => {
                           color: "primary",
                           size: "28"
                         }, {
-                          default: _withCtx(() => _cache[1] || (_cache[1] = [
+                          default: _withCtx(() => _cache[2] || (_cache[2] = [
                             _createTextVNode("mdi-chart-timeline-variant")
                           ])),
                           _: 1,
-                          __: [1]
+                          __: [2]
                         })
                       ]),
                       _: 1
@@ -951,7 +1006,7 @@ return (_ctx, _cache) => {
                   ]),
                   _: 1
                 }),
-                _cache[2] || (_cache[2] = _createElementVNode("div", null, [
+                _cache[3] || (_cache[3] = _createElementVNode("div", null, [
                   _createElementVNode("h1", { class: "text-h4 font-weight-bold" }, "插件热度监控"),
                   _createElementVNode("p", { class: "text-subtitle-1 text-medium-emphasis" }, "实时监控插件下载量增长趋势")
                 ], -1))
@@ -970,7 +1025,7 @@ return (_ctx, _cache) => {
                 color: "primary",
                 size: "60"
               }),
-              _cache[3] || (_cache[3] = _createElementVNode("div", { class: "text-h6 mt-4" }, "正在加载数据...", -1))
+              _cache[4] || (_cache[4] = _createElementVNode("div", { class: "text-h6 mt-4" }, "正在加载数据...", -1))
             ])
           ]))
         : (_openBlock(), _createElementBlock("div", _hoisted_4, [
@@ -993,17 +1048,17 @@ return (_ctx, _cache) => {
                           color: "primary",
                           class: "mb-2"
                         }, {
-                          default: _withCtx(() => _cache[4] || (_cache[4] = [
+                          default: _withCtx(() => _cache[5] || (_cache[5] = [
                             _createTextVNode("mdi-puzzle")
                           ])),
                           _: 1,
-                          __: [4]
+                          __: [5]
                         }),
                         _createElementVNode("div", _hoisted_5, _toDisplayString(monitoredPlugins.value.length), 1),
-                        _cache[5] || (_cache[5] = _createElementVNode("div", { class: "text-subtitle-2" }, "监控插件", -1))
+                        _cache[6] || (_cache[6] = _createElementVNode("div", { class: "text-subtitle-2" }, "监控插件", -1))
                       ]),
                       _: 1,
-                      __: [5]
+                      __: [6]
                     })
                   ]),
                   _: 1
@@ -1025,17 +1080,17 @@ return (_ctx, _cache) => {
                           color: "success",
                           class: "mb-2"
                         }, {
-                          default: _withCtx(() => _cache[6] || (_cache[6] = [
+                          default: _withCtx(() => _cache[7] || (_cache[7] = [
                             _createTextVNode("mdi-download")
                           ])),
                           _: 1,
-                          __: [6]
+                          __: [7]
                         }),
                         _createElementVNode("div", _hoisted_6, _toDisplayString(totalDownloads.value.toLocaleString()), 1),
-                        _cache[7] || (_cache[7] = _createElementVNode("div", { class: "text-subtitle-2" }, "总下载量", -1))
+                        _cache[8] || (_cache[8] = _createElementVNode("div", { class: "text-subtitle-2" }, "总下载量", -1))
                       ]),
                       _: 1,
-                      __: [7]
+                      __: [8]
                     })
                   ]),
                   _: 1
@@ -1057,17 +1112,17 @@ return (_ctx, _cache) => {
                           color: "info",
                           class: "mb-2"
                         }, {
-                          default: _withCtx(() => _cache[8] || (_cache[8] = [
+                          default: _withCtx(() => _cache[9] || (_cache[9] = [
                             _createTextVNode("mdi-trending-up")
                           ])),
                           _: 1,
-                          __: [8]
+                          __: [9]
                         }),
                         _createElementVNode("div", _hoisted_7, "+" + _toDisplayString(totalGrowth.value.toLocaleString()), 1),
-                        _cache[9] || (_cache[9] = _createElementVNode("div", { class: "text-subtitle-2" }, "日增长量", -1))
+                        _cache[10] || (_cache[10] = _createElementVNode("div", { class: "text-subtitle-2" }, "日增长量", -1))
                       ]),
                       _: 1,
-                      __: [9]
+                      __: [10]
                     })
                   ]),
                   _: 1
@@ -1089,17 +1144,17 @@ return (_ctx, _cache) => {
                           color: "warning",
                           class: "mb-2"
                         }, {
-                          default: _withCtx(() => _cache[10] || (_cache[10] = [
+                          default: _withCtx(() => _cache[11] || (_cache[11] = [
                             _createTextVNode("mdi-clock-outline")
                           ])),
                           _: 1,
-                          __: [10]
+                          __: [11]
                         }),
                         _createElementVNode("div", _hoisted_8, _toDisplayString(lastUpdateTime.value || '未知'), 1),
-                        _cache[11] || (_cache[11] = _createElementVNode("div", { class: "text-subtitle-2" }, "最后检查", -1))
+                        _cache[12] || (_cache[12] = _createElementVNode("div", { class: "text-subtitle-2" }, "最后检查", -1))
                       ]),
                       _: 1,
-                      __: [11]
+                      __: [12]
                     })
                   ]),
                   _: 1
@@ -1116,14 +1171,60 @@ return (_ctx, _cache) => {
                         _createVNode(_component_v_card_title, { class: "d-flex align-center" }, {
                           default: _withCtx(() => [
                             _createVNode(_component_v_icon, { class: "mr-2" }, {
-                              default: _withCtx(() => _cache[12] || (_cache[12] = [
-                                _createTextVNode("mdi-chart-timeline-variant")
-                              ])),
-                              _: 1,
-                              __: [12]
+                              default: _withCtx(() => [
+                                _createTextVNode(_toDisplayString(viewMode.value === 'heatmap' ? 'mdi-chart-timeline-variant' : 'mdi-chart-line'), 1)
+                              ]),
+                              _: 1
                             }),
-                            _cache[17] || (_cache[17] = _createTextVNode(" 插件下载量热力图 ")),
+                            _createTextVNode(" " + _toDisplayString(viewMode.value === 'heatmap' ? '插件下载量热力图' : '插件下载量趋势图') + " ", 1),
                             _createVNode(_component_v_spacer),
+                            _createVNode(_component_v_btn_toggle, {
+                              modelValue: viewMode.value,
+                              "onUpdate:modelValue": _cache[0] || (_cache[0] = $event => ((viewMode).value = $event)),
+                              color: "primary",
+                              size: "small",
+                              variant: "outlined",
+                              mandatory: "",
+                              class: "mr-2"
+                            }, {
+                              default: _withCtx(() => [
+                                _createVNode(_component_v_btn, {
+                                  value: "heatmap",
+                                  size: "small"
+                                }, {
+                                  default: _withCtx(() => [
+                                    _createVNode(_component_v_icon, { start: "" }, {
+                                      default: _withCtx(() => _cache[13] || (_cache[13] = [
+                                        _createTextVNode("mdi-chart-timeline-variant")
+                                      ])),
+                                      _: 1,
+                                      __: [13]
+                                    }),
+                                    _cache[14] || (_cache[14] = _createTextVNode(" 热力图 "))
+                                  ]),
+                                  _: 1,
+                                  __: [14]
+                                }),
+                                _createVNode(_component_v_btn, {
+                                  value: "trend",
+                                  size: "small"
+                                }, {
+                                  default: _withCtx(() => [
+                                    _createVNode(_component_v_icon, { start: "" }, {
+                                      default: _withCtx(() => _cache[15] || (_cache[15] = [
+                                        _createTextVNode("mdi-chart-line")
+                                      ])),
+                                      _: 1,
+                                      __: [15]
+                                    }),
+                                    _cache[16] || (_cache[16] = _createTextVNode(" 趋势图 "))
+                                  ]),
+                                  _: 1,
+                                  __: [16]
+                                })
+                              ]),
+                              _: 1
+                            }, 8, ["modelValue"]),
                             _createVNode(_component_v_btn, {
                               color: "secondary",
                               variant: "outlined",
@@ -1133,16 +1234,16 @@ return (_ctx, _cache) => {
                             }, {
                               default: _withCtx(() => [
                                 _createVNode(_component_v_icon, { start: "" }, {
-                                  default: _withCtx(() => _cache[13] || (_cache[13] = [
+                                  default: _withCtx(() => _cache[17] || (_cache[17] = [
                                     _createTextVNode("mdi-cog")
                                   ])),
                                   _: 1,
-                                  __: [13]
+                                  __: [17]
                                 }),
-                                _cache[14] || (_cache[14] = _createTextVNode(" 配置 "))
+                                _cache[18] || (_cache[18] = _createTextVNode(" 配置 "))
                               ]),
                               _: 1,
-                              __: [14]
+                              __: [18]
                             }),
                             _createVNode(_component_v_btn, {
                               color: "primary",
@@ -1153,27 +1254,37 @@ return (_ctx, _cache) => {
                             }, {
                               default: _withCtx(() => [
                                 _createVNode(_component_v_icon, { start: "" }, {
-                                  default: _withCtx(() => _cache[15] || (_cache[15] = [
+                                  default: _withCtx(() => _cache[19] || (_cache[19] = [
                                     _createTextVNode("mdi-refresh")
                                   ])),
                                   _: 1,
-                                  __: [15]
+                                  __: [19]
                                 }),
-                                _cache[16] || (_cache[16] = _createTextVNode(" 刷新数据 "))
+                                _cache[20] || (_cache[20] = _createTextVNode(" 刷新数据 "))
                               ]),
                               _: 1,
-                              __: [16]
+                              __: [20]
                             }, 8, ["loading"])
                           ]),
-                          _: 1,
-                          __: [17]
+                          _: 1
                         }),
                         _createVNode(_component_v_card_text, null, {
                           default: _withCtx(() => [
-                            _createVNode(GitHubHeatmap, {
-                              api: __props.api,
-                              onSquareClicked: handleSquareClicked
-                            }, null, 8, ["api"])
+                            (viewMode.value === 'heatmap')
+                              ? (_openBlock(), _createElementBlock("div", _hoisted_9, [
+                                  _createVNode(GitHubHeatmap, {
+                                    api: __props.api,
+                                    onSquareClicked: handleSquareClicked
+                                  }, null, 8, ["api"])
+                                ]))
+                              : (viewMode.value === 'trend')
+                                ? (_openBlock(), _createElementBlock("div", _hoisted_10, [
+                                    _createVNode(TrendChart, {
+                                      api: __props.api,
+                                      "all-plugins-data": allPluginsData.value
+                                    }, null, 8, ["api", "all-plugins-data"])
+                                  ]))
+                                : _createCommentVNode("", true)
                           ]),
                           _: 1
                         })
@@ -1189,7 +1300,7 @@ return (_ctx, _cache) => {
           ])),
       _createVNode(_component_v_snackbar, {
         modelValue: snackbar.show,
-        "onUpdate:modelValue": _cache[0] || (_cache[0] = $event => ((snackbar.show) = $event)),
+        "onUpdate:modelValue": _cache[1] || (_cache[1] = $event => ((snackbar.show) = $event)),
         color: snackbar.color,
         timeout: 3000
       }, {
@@ -1205,6 +1316,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-ae69e0ab"]]);
+const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-24fd7484"]]);
 
 export { Page as default };

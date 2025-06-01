@@ -12,6 +12,8 @@ from app.plugins import _PluginBase
 from app.core.plugin import PluginManager
 from app.helper.plugin import PluginHelper
 from app.schemas import NotificationType
+from app.schemas.types import EventType
+from app.core.event import eventmanager, Event
 from app.log import logger
 
 
@@ -594,11 +596,162 @@ class PluginHeatMonitor(_PluginBase):
 
         return result
 
+    @eventmanager.register(EventType.PluginAction)
+    def handle_remote_command(self, event: Event):
+        """处理远程命令事件"""
+        if not event:
+            return
 
-    
+        event_data = event.event_data
+        if not event_data or event_data.get("action") != "get_monitored_downloads":
+            return
+
+        logger.info("收到远程命令：获取监控插件实时下载统计")
+
+        try:
+            # 获取监控插件下载统计
+            result = self._get_monitored_plugins_downloads()
+
+            # 发送结果通知
+            self.post_message(
+                channel=event_data.get("channel"),
+                title="📊 监控插件下载统计",
+                text=self._format_downloads_message(result),
+                userid=event_data.get("user"),
+            )
+
+            logger.info("远程命令执行完成：获取监控插件实时下载统计")
+
+        except Exception as e:
+            logger.error(f"执行远程命令失败：{str(e)}", exc_info=True)
+            self.post_message(
+                channel=event_data.get("channel"),
+                title="❌ 获取下载统计失败",
+                text=f"执行失败：{str(e)}",
+                userid=event_data.get("user"),
+            )
+
+    def _get_monitored_plugins_downloads(self) -> Dict[str, Any]:
+        """获取当前监控插件的实时总下载量统计"""
+        try:
+            if not self._monitored_plugins:
+                return {
+                    "status": "empty",
+                    "message": "暂无监控插件",
+                    "plugins": [],
+                    "total_downloads": 0,
+                    "monitored_count": 0,
+                    "last_update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+
+            # 获取实时插件统计数据
+            plugin_helper = PluginHelper()
+            current_stats = plugin_helper.get_statistic()
+
+            if not current_stats:
+                return {
+                    "status": "error",
+                    "message": "无法获取插件统计数据",
+                    "plugins": [],
+                    "total_downloads": 0,
+                    "monitored_count": 0,
+                    "last_update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+
+            plugins_data = []
+            total_downloads = 0
+
+            for plugin_id, config in self._monitored_plugins.items():
+                # 获取插件信息
+                plugin_name, plugin_icon = self._get_plugin_info(plugin_id)
+
+                # 获取当前实时下载量
+                current_downloads = current_stats.get(plugin_id, 0)
+                total_downloads += current_downloads
+
+                # 获取历史数据用于获取最后检查时间
+                history_key = f"history_{plugin_id}"
+                history_data = self.get_data(history_key) or {}
+                last_check_time = history_data.get("last_check_time")
+
+                # 格式化最后检查时间
+                last_check_formatted = None
+                if last_check_time:
+                    last_check_formatted = datetime.fromtimestamp(last_check_time).strftime("%Y-%m-%d %H:%M:%S")
+
+                plugins_data.append({
+                    "plugin_id": plugin_id,
+                    "plugin_name": plugin_name,
+                    "plugin_icon": plugin_icon,
+                    "current_downloads": current_downloads,
+                    "last_check_time": last_check_formatted
+                })
+
+            return {
+                "status": "success",
+                "message": f"成功获取 {len(plugins_data)} 个监控插件的下载统计",
+                "plugins": plugins_data,
+                "total_downloads": total_downloads,
+                "monitored_count": len(self._monitored_plugins),
+                "last_update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+
+        except Exception as e:
+            logger.error(f"获取监控插件下载统计失败：{str(e)}", exc_info=True)
+            return {
+                "status": "error",
+                "message": f"获取统计数据失败：{str(e)}",
+                "plugins": [],
+                "total_downloads": 0,
+                "monitored_count": 0,
+                "last_update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+
+    def _format_downloads_message(self, result: Dict[str, Any]) -> str:
+        """格式化下载统计消息"""
+        if result["status"] == "empty":
+            return "📭 暂无监控插件"
+
+        if result["status"] == "error":
+            return f"❌ {result['message']}"
+
+        plugins = result["plugins"]
+        total_downloads = result["total_downloads"]
+        monitored_count = result["monitored_count"]
+        last_update_time = result["last_update_time"]
+
+        message_lines = [
+            f"📊 监控插件下载统计报告",
+            f"",
+            f"🔢 监控插件数量：{monitored_count}",
+            f"📈 总下载量：{total_downloads:,}",
+            f"🕐 更新时间：{last_update_time}",
+            f"",
+            f"📋 详细统计："
+        ]
+
+        for plugin in plugins:
+            plugin_name = plugin["plugin_name"]
+            current_downloads = plugin["current_downloads"]
+
+            message_lines.extend([
+                f"🔸 {plugin_name}：{current_downloads:,}",
+            ])
+
+        return "\n".join(message_lines)
+
+
     def get_command(self) -> List[Dict[str, Any]]:
         """注册插件命令"""
-        return []
+        return [
+            {
+                "cmd": "/get_monitored_downloads",
+                "event": EventType.PluginAction,
+                "desc": "插件实时下载量",
+                "category": "插件监控",
+                "data": {"action": "get_monitored_downloads"},
+            }
+        ]
 
     def get_api(self) -> List[Dict[str, Any]]:
         """注册插件API"""

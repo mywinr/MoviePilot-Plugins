@@ -37,30 +37,90 @@ import Dashboard from './components/Dashboard.vue'
 
 const tab = ref('page')
 
+// 生成测试用的日期数据
+function generateMockDailyData(days = 30) {
+  const data = {}
+  const today = new Date()
+
+  for (let i = days - 1; i >= 0; i--) {
+    const date = new Date(today)
+    date.setDate(date.getDate() - i)
+    const dateStr = date.toISOString().split('T')[0]
+
+    // 生成随机下载量，模拟真实的增长趋势
+    const baseValue = Math.max(0, Math.floor(Math.random() * 50) + (days - i) * 2)
+    data[dateStr] = baseValue
+  }
+
+  return data
+}
+
 // Mock API for local development
 const mockApi = {
   get: async (url) => {
-    console.log('Mock API GET:', url)
     // 返回模拟数据
     if (url.includes('status')) {
       return {
         monitored_plugins: [
           {
-            name: 'TestPlugin',
+            plugin_name: 'TestPlugin1',
+            name: 'TestPlugin1',
             downloads: 1680,
             last_check: '2024-01-15 10:30:00',
             increment_since_last: 50,
-            download_increment: 100
+            download_increment: 100,
+            daily_downloads: generateMockDailyData(30)
+          },
+          {
+            plugin_name: 'TestPlugin2',
+            name: 'TestPlugin2',
+            downloads: 2340,
+            last_check: '2024-01-15 10:30:00',
+            increment_since_last: 30,
+            download_increment: 80,
+            daily_downloads: generateMockDailyData(25)
           }
         ],
-        total_downloads: 1680,
-        global_last_check_time: '2024-01-15 10:30:00'
+        total_downloads: 4020,
+        global_last_check_time: '2024-01-15 10:30:00',
+        day_data: generateMockDailyData(30)
+      }
+    } else if (url.includes('plugin-list')) {
+      // 插件列表 API
+      return {
+        status: 'success',
+        plugins: [
+          {
+            id: 'testplugin1',
+            name: 'TestPlugin1',
+            icon: 'https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/heatmonitor.png'
+          },
+          {
+            id: 'testplugin2',
+            name: 'TestPlugin2',
+            icon: 'https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/heatmonitor.png'
+          },
+          {
+            id: 'testplugin3',
+            name: 'TestPlugin3',
+            icon: 'https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/heatmonitor.png'
+          }
+        ]
+      }
+    } else if (url.includes('plugin-heatmap')) {
+      // 插件热力图数据 API
+      const pluginId = url.split('plugin_id=')[1]
+
+      return {
+        status: 'success',
+        dayData: generateMockDailyData(30),
+        current_downloads: Math.floor(Math.random() * 1000) + 500
       }
     }
+
     return {}
   },
   post: async (url, data) => {
-    console.log('Mock API POST:', url, data)
     return { success: true }
   }
 }
