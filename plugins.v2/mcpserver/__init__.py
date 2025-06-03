@@ -251,6 +251,13 @@ class ProcessManager:
                     time.sleep(5)
                     self._start_monitor()
                     logger.info("服务器启动成功")
+
+                    # 处理暂存的工具注册请求
+                    self.plugin._process_pending_registrations()
+
+                    # 通知其他插件MCPServer已就绪
+                    self.plugin._notify_plugins_mcp_server_ready()
+
                     return True
                 else:
                     self._set_state(ServerState.ERROR)
@@ -620,7 +627,7 @@ class MCPServer(_PluginBase, metaclass=SingletonClass):
     plugin_name = "MCP Server"
     plugin_desc = "使用MCP客户端通过大模型来操作MoviePilot"
     plugin_icon = "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/mcp.png"
-    plugin_version = "2.0"
+    plugin_version = "2.1"
     plugin_author = "DzAvril"
     author_url = "https://github.com/DzAvril"
     plugin_config_prefix = "mcpserver_"
@@ -632,7 +639,7 @@ class MCPServer(_PluginBase, metaclass=SingletonClass):
         "server_type": "streamable",
         "host": "0.0.0.0",
         "port": 3111,
-        "log_level": "INFO",
+        "log_level": "DEBUG",
         "health_check_interval": 3,
         "max_startup_time": 60,
         "venv_dir": "venv",
@@ -653,6 +660,7 @@ class MCPServer(_PluginBase, metaclass=SingletonClass):
     _server_script_path = None
     _downloader_helper = DownloaderHelper()
     _process_manager = None
+    _pending_registrations = []  # 暂存待处理的工具注册请求
 
     def __init__(self):
         """初始化MCPServer类，创建ProcessManager实例和设置基本路径"""
@@ -690,6 +698,13 @@ class MCPServer(_PluginBase, metaclass=SingletonClass):
                 f"配置变化: enable={previous_enable}->{self._enable}, "
                 f"server_type={previous_server_type}->{current_server_type}"
             )
+
+            # 如果插件从禁用变为启用，处理暂存的注册请求并通知其他插件
+            if not previous_enable and self._enable:
+                logger.info("插件已启用，处理暂存的工具注册请求")
+                self._process_pending_registrations()
+                # 通知其他插件MCPServer已启用，可以重新注册
+                self._notify_plugins_mcp_server_ready()
 
         if current_server_type == "sse":
             self._server_script_path = self._plugin_dir / "sse_server.py"
@@ -1928,6 +1943,18 @@ class MCPServer(_PluginBase, metaclass=SingletonClass):
 
             logger.info(f"收到插件工具注册请求: {plugin_id}, 工具数量: {len(tools)}")
 
+            # 检查MCPServer是否已启用
+            if not self.get_state():
+                logger.warning(f"MCPServer插件未启用，暂存工具注册请求: {plugin_id}")
+                # 暂存请求，等待插件启用后处理
+                self._pending_registrations.append({
+                    "action": "register",
+                    "plugin_id": plugin_id,
+                    "tools": tools,
+                    "timestamp": time.time()
+                })
+                return
+
             # 这里需要通知MCP Server进程注册工具
             # 由于MCP Server运行在独立进程中，我们需要通过某种方式通知它
             # 可以考虑使用文件、数据库或API的方式
@@ -2002,6 +2029,67 @@ class MCPServer(_PluginBase, metaclass=SingletonClass):
             logger.error(f"通知MCP Server注册工具失败: {str(e)}")
             logger.error(traceback.format_exc())
 
+    def _process_pending_registrations(self):
+        """处理暂存的工具注册请求"""
+        if not self._pending_registrations:
+            return
+
+        logger.info(f"开始处理 {len(self._pending_registrations)} 个暂存的工具注册请求")
+
+        processed_requests = []
+        for request in self._pending_registrations:
+            try:
+                action = request.get("action")
+                plugin_id = request.get("plugin_id")
+
+                if action == "register":
+                    tools = request.get("tools", [])
+                    logger.info(f"处理暂存的工具注册请求: {plugin_id}, 工具数量: {len(tools)}")
+                    self._notify_mcp_server_tool_register(plugin_id, tools)
+                elif action == "unregister":
+                    logger.info(f"处理暂存的工具注销请求: {plugin_id}")
+                    self._notify_mcp_server_tool_unregister(plugin_id)
+                elif action == "register_prompt":
+                    prompts = request.get("prompts", [])
+                    logger.info(f"处理暂存的提示注册请求: {plugin_id}, 提示数量: {len(prompts)}")
+                    self._notify_mcp_server_prompt_register(plugin_id, prompts)
+                elif action == "unregister_prompt":
+                    logger.info(f"处理暂存的提示注销请求: {plugin_id}")
+                    self._notify_mcp_server_prompt_unregister(plugin_id)
+
+                processed_requests.append(request)
+
+            except Exception as e:
+                logger.error(f"处理暂存请求失败: {str(e)}")
+                # 继续处理其他请求
+
+        # 移除已处理的请求
+        for request in processed_requests:
+            self._pending_registrations.remove(request)
+
+        logger.info(f"暂存请求处理完成，剩余 {len(self._pending_registrations)} 个请求")
+
+    def _notify_plugins_mcp_server_ready(self):
+        """通知其他插件MCPServer已就绪，可以重新注册工具和提示"""
+        try:
+            logger.info("通知其他插件MCPServer已就绪")
+
+            # 发送广播事件，通知其他插件MCPServer已启用
+            eventmanager.send_event(
+                EventType.PluginAction,
+                {
+                    "action": "mcp_server_ready",
+                    "server_id": self.__class__.__name__,
+                    "timestamp": time.time()
+                }
+            )
+
+            logger.info("MCPServer就绪通知已发送")
+
+        except Exception as e:
+            logger.error(f"通知插件MCPServer就绪失败: {str(e)}")
+            logger.error(traceback.format_exc())
+
     def _notify_mcp_server_tool_unregister(self, plugin_id: str):
         """通知MCP Server进程注销工具"""
         try:
@@ -2039,6 +2127,18 @@ class MCPServer(_PluginBase, metaclass=SingletonClass):
                 return
 
             logger.info(f"收到插件提示注册请求: {plugin_id}, 提示数量: {len(prompts)}")
+
+            # 检查MCPServer是否已启用
+            if not self.get_state():
+                logger.warning(f"MCPServer插件未启用，暂存提示注册请求: {plugin_id}")
+                # 暂存请求，等待插件启用后处理
+                self._pending_registrations.append({
+                    "action": "register_prompt",
+                    "plugin_id": plugin_id,
+                    "prompts": prompts,
+                    "timestamp": time.time()
+                })
+                return
 
             # 通知MCP Server进程注册提示
             self._notify_mcp_server_prompt_register(plugin_id, prompts)

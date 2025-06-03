@@ -335,6 +335,219 @@ networks:
 
 当前的方案只是由于市面上客户端支持度不够的权宜之计，相信很快就会有更多的客户端支持自定义Header，届时就可以直接连到MCP Server了。
 
+## 扩展MCP功能插件开发指引
+
+### 概述
+
+MCP Server 插件支持其他插件向其注册自定义的工具（tools）和提示（prompts），让开发者能够轻松扩展 MCP 功能。通过使用装饰器系统，插件开发者可以大幅减少样板代码，专注于业务逻辑的实现。
+
+### 核心特性
+
+- **极简开发**：使用 `@mcp_tool` 和 `@mcp_prompt` 装饰器自动处理注册
+- **自动发现**：自动扫描并注册标记的方法
+- **统一错误处理**：内置错误处理和标准化响应格式
+- **自动参数验证**：根据 schema 自动验证输入参数
+- **零配置**：无需手动编写工具配置和执行方法
+- **事件驱动**：自动监听 MCP Server 就绪事件并注册工具
+- **故障恢复**：MCP Server 重启后自动重新注册
+
+### 快速开始
+
+#### 1. 基本插件结构
+
+```python
+from app.plugins import _PluginBase
+
+# 导入MCP插件助手
+try:
+    from app.plugins.mcpserver.dev.mcp_dev import (
+        mcp_tool,
+        mcp_prompt,
+        MCPDecoratorMixin
+    )
+    MCP_DEV_AVAILABLE = True
+except ImportError as e:
+    # MCP Server 插件不可用时的降级处理
+    MCP_DEV_AVAILABLE = False
+
+    def mcp_tool(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+
+    def mcp_prompt(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+
+    class MCPDecoratorMixin:
+        pass
+
+class MyPlugin(_PluginBase, MCPDecoratorMixin):
+    plugin_name = "我的MCP插件"
+    plugin_desc = "演示MCP功能扩展"
+
+    def init_plugin(self, config: dict = None):
+        # 初始化MCP装饰器支持
+        if MCP_DEV_AVAILABLE:
+            self.init_mcp_decorators()
+
+    def stop_service(self):
+        # 停止MCP装饰器支持
+        if MCP_DEV_AVAILABLE and hasattr(self, 'stop_mcp_decorators'):
+            self.stop_mcp_decorators()
+
+    def get_api(self) -> list:
+        """获取插件API端点（如果需要API功能）"""
+        api_endpoints = []
+
+        # 添加MCP相关的API端点
+        if hasattr(self, 'get_mcp_api_endpoints'):
+            api_endpoints.extend(self.get_mcp_api_endpoints())
+
+        return api_endpoints
+```
+
+#### 2. 添加MCP工具
+
+```python
+@mcp_tool(
+    name="my-greeting",
+    description="个性化问候工具",
+    parameters=[
+        {
+            "name": "name",
+            "description": "要问候的人的姓名",
+            "required": True,
+            "type": "string"
+        },
+        {
+            "name": "language",
+            "description": "问候语言",
+            "required": False,
+            "type": "string",
+            "enum": ["zh", "en"]
+        }
+    ]
+)
+def greeting_tool(self, name: str, language: str = "zh") -> str:
+    """问候工具实现"""
+    if language == "en":
+        return f"Hello, {name}! Welcome to MoviePilot!"
+    else:
+        return f"你好，{name}！欢迎使用 MoviePilot！"
+```
+
+#### 3. 添加MCP提示
+
+```python
+@mcp_prompt(
+    name="movie-review-prompt",
+    description="电影评论生成提示",
+    parameters=[
+        {
+            "name": "movie_title",
+            "description": "电影标题",
+            "required": True
+        },
+        {
+            "name": "style",
+            "description": "评论风格",
+            "required": False
+        }
+    ]
+)
+def movie_review_prompt(self, movie_title: str, style: str = "专业") -> dict:
+    """电影评论提示实现"""
+    return {
+        "messages": [
+            {
+                "role": "user",
+                "content": {
+                    "type": "text",
+                    "text": f"请为电影《{movie_title}》写一篇{style}风格的评论"
+                }
+            }
+        ]
+    }
+```
+
+### 参数格式说明
+
+
+```python
+parameters=[
+    {
+        "name": "参数名",
+        "description": "参数描述",
+        "required": True,  # 是否必需
+        "type": "string",  # 参数类型：string, integer, number, boolean, array, object
+        "enum": ["选项1", "选项2"]  # 可选：枚举值
+    }
+]
+```
+
+### 功能控制
+
+可以通过设置类属性来控制MCP功能的启用：
+
+```python
+class MyPlugin(_PluginBase, MCPDecoratorMixin):
+    # 控制功能开关
+    _enable_tools = True      # 启用工具注册
+    _enable_prompts = True    # 启用提示注册
+
+    def init_plugin(self, config: dict = None):
+        # 根据配置动态调整
+        if config:
+            self._enable_tools = config.get("enable_tools", True)
+            self._enable_prompts = config.get("enable_prompts", True)
+
+        self.init_mcp_decorators()
+```
+
+## 事件机制
+
+MCP插件系统使用事件驱动的注册机制：
+
+1. **插件启动** → 注册事件监听器
+2. **MCP Server启动** → 发送 `mcp_server_ready` 事件
+3. **插件收到事件** → 异步注册工具和提示
+4. **MCP Server重启** → 再次发送事件，插件自动重新注册
+
+### 最佳实践
+
+#### 1. 导入保护
+
+始终使用 try-catch 保护 MCP 导入，确保插件在 MCP Server 不可用时仍能正常工作：
+
+```python
+try:
+    from app.plugins.mcpserver.dev.mcp_dev import (
+        mcp_tool, mcp_prompt, MCPDecoratorMixin
+    )
+    MCP_DEV_AVAILABLE = True
+except ImportError:
+    MCP_DEV_AVAILABLE = False
+    # 定义空装饰器
+```
+
+#### 2. 专注业务逻辑
+
+装饰器系统自动处理注册、验证、错误处理等，让你专注于业务逻辑：
+
+```python
+@mcp_tool(name="business-tool", description="业务工具")
+def business_tool(self, input_data: str) -> dict:
+    # 直接编写业务逻辑，其他都自动处理
+    processed = process_business_data(input_data)
+    return {"result": processed}
+```
+
+### 示例项目
+
+完整示例请参考：[MCPToolExample](../mcptoolexample/__init__.py)
+
 ## 技术支持
 
 如有任何问题或建议，请通过以下方式联系：
