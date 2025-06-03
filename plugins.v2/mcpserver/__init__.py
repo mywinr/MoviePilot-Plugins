@@ -64,7 +64,7 @@ class ProcessManager:
     def _cleanup_existing_servers(self):
         """清理可能存在的其他MCP服务器进程"""
         try:
-            port = self.plugin._config.get("port", 3222)
+            port = self.plugin._config.get("port", 3111)
             host = self.plugin._config.get("host", "0.0.0.0")
 
             logger.info(f"检查并清理端口 {port} 上可能存在的MCP服务器进程")
@@ -629,7 +629,7 @@ class MCPServer(_PluginBase, metaclass=SingletonClass):
     _config = {
         "server_type": "streamable",
         "host": "0.0.0.0",
-        "port": 3222,
+        "port": 3111,
         "log_level": "INFO",
         "health_check_interval": 3,
         "max_startup_time": 60,
@@ -978,7 +978,7 @@ class MCPServer(_PluginBase, metaclass=SingletonClass):
         # 获取当前服务器类型和相关信息
         server_type = self._config.get("server_type", "streamable")
         host = self._config.get("host", "0.0.0.0")
-        port = self._config.get("port", 3222)
+        port = self._config.get("port", 3111)
 
         # 初始化状态信息
         status = {
