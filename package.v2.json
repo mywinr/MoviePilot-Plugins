@@ -28,7 +28,7 @@
         "name": "MCP Server",
         "description": "使用MCP客户端通过大模型来操作MoviePilot",
         "labels": "MCP",
-        "version": "1.9",
+        "version": "2.0",
         "icon": "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/mcp.png",
         "author": "DzAvril",
         "level": 1,
