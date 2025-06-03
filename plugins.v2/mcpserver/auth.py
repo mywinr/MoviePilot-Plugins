@@ -49,14 +49,20 @@ class TokenManager:
 class BearerAuthMiddleware(BaseHTTPMiddleware):
     """Bearer Token认证中间件"""
 
-    def __init__(self, app, token_manager: TokenManager, exclude_paths: list = None):
+    def __init__(self, app, token_manager: TokenManager, exclude_paths: list = None, require_auth: bool = True):
         super().__init__(app)
         self.token_manager = token_manager
         self.exclude_paths = exclude_paths or ["/health"]
+        self.require_auth = require_auth
 
     async def dispatch(self, request, call_next):
         # 检查是否是排除的路径（不需要认证）
         if request.url.path in self.exclude_paths:
+            return await call_next(request)
+
+        # 如果不需要认证，直接通过
+        if not self.require_auth:
+            logger.debug("认证已禁用，跳过Token验证")
             return await call_next(request)
 
         # 获取当前token

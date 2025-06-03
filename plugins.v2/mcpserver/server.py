@@ -254,6 +254,18 @@ def _update_plugin_tools(tool_manager, plugin_tools):
     help="Log file path to write logs to",
 )
 @click.option(
+    "--require-auth",
+    is_flag=True,
+    default=False,
+    help="Enable Bearer token authentication (default: disabled)",
+)
+@click.option(
+    "--no-auth",
+    is_flag=True,
+    default=False,
+    help="Disable Bearer token authentication",
+)
+@click.option(
     "--moviepilot-port",
     default=3001,
     help="MoviePilot main program port number",
@@ -267,6 +279,8 @@ def main(
     access_token: str,
     log_file: str,
     moviepilot_port: int,
+    require_auth: bool,
+    no_auth: bool,
 ) -> int:
     # Configure logging
     log_handlers = []
@@ -306,6 +320,15 @@ def main(
     # 设置MoviePilot端口号
     from utils import set_moviepilot_port
     set_moviepilot_port(moviepilot_port)
+
+    # 确定认证配置
+    auth_enabled = require_auth and not no_auth
+    if no_auth:
+        logger.info("认证已禁用 (--no-auth)")
+    elif require_auth:
+        logger.info("认证已启用 (--require-auth)")
+    else:
+        logger.info("认证已禁用 (默认)")
 
     # 创建Token管理器
     token_manager = create_token_manager(auth_token, access_token)
@@ -438,7 +461,7 @@ def main(
 
     # 创建中间件列表
     middleware = [
-        Middleware(BearerAuthMiddleware, token_manager=token_manager)
+        Middleware(BearerAuthMiddleware, token_manager=token_manager, require_auth=auth_enabled)
     ]
 
     # 创建路由

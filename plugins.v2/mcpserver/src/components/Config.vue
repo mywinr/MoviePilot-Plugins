@@ -55,6 +55,18 @@
           </v-row>
           <v-row>
             <v-col cols="12" md="6">
+              <v-switch
+                v-model="config.require_auth"
+                label="启用API认证"
+                color="primary"
+                inset
+                hint="是否要求客户端连接时提供API密钥进行认证"
+                persistent-hint
+              ></v-switch>
+            </v-col>
+          </v-row>
+          <v-row v-if="config.require_auth">
+            <v-col cols="12" md="6">
               <v-text-field
                 v-model="config.auth_token"
                 label="API密钥"
@@ -273,6 +285,7 @@ const defaultConfig = {
   server_type: 'streamable',      // 默认使用streamable
   port: '3111',
   auth_token: '',
+  require_auth: true,             // 默认启用认证
   mp_username: 'admin',
   mp_password: '',
   dashboard_refresh_interval: 30, // 默认30秒
@@ -310,6 +323,11 @@ onMounted(() => {
       // 处理 auth_token
       if ('auth_token' in props.initialConfig.config) {
         config.auth_token = props.initialConfig.config.auth_token
+      }
+
+      // 处理认证配置
+      if ('require_auth' in props.initialConfig.config) {
+        config.require_auth = props.initialConfig.config.require_auth
       }
 
       // 处理 MoviePilot 用户名
@@ -378,6 +396,7 @@ async function saveConfig() {
         server_type: config.server_type,
         port: config.port,
         auth_token: config.auth_token,
+        require_auth: config.require_auth,
         mp_username: config.mp_username,
         mp_password: config.mp_password,
         dashboard_refresh_interval: config.dashboard_refresh_interval,
@@ -408,6 +427,10 @@ async function saveConfig() {
         // 如果服务器类型发生变化，显示特殊提示
         if (response.server_type_changed) {
           successMessage.value = response.message || '配置已保存，服务器类型已切换并重启'
+        }
+        // 如果认证配置发生变化，显示特殊提示
+        else if (response.auth_config_changed) {
+          successMessage.value = response.message || '配置已保存，认证配置已更新并重启服务器'
         }
 
         console.log('配置保存成功:', response)

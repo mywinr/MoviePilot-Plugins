@@ -399,6 +399,9 @@ class ProcessManager:
                 self.plugin.update_config({"config": self.plugin._config})
                 logger.info("已生成新的API认证token")
 
+            # 获取认证配置
+            require_auth = self.plugin._config.get("require_auth", True)
+
             access_token = self.plugin._config.get("access_token", "")
 
             log_file_path = str(
@@ -423,6 +426,12 @@ class ProcessManager:
                 "--access-token",
                 access_token,
             ]
+
+            # 根据配置决定是否启用认证
+            if require_auth:
+                cmd.append("--require-auth")
+            else:
+                cmd.append("--no-auth")
 
             return cmd
 
@@ -627,7 +636,7 @@ class MCPServer(_PluginBase, metaclass=SingletonClass):
     plugin_name = "MCP Server"
     plugin_desc = "使用MCP客户端通过大模型来操作MoviePilot"
     plugin_icon = "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/mcp.png"
-    plugin_version = "2.1"
+    plugin_version = "2.2"
     plugin_author = "DzAvril"
     author_url = "https://github.com/DzAvril"
     plugin_config_prefix = "mcpserver_"
@@ -639,7 +648,7 @@ class MCPServer(_PluginBase, metaclass=SingletonClass):
         "server_type": "streamable",
         "host": "0.0.0.0",
         "port": 3111,
-        "log_level": "DEBUG",
+        "log_level": "INFO",
         "health_check_interval": 3,
         "max_startup_time": 60,
         "venv_dir": "venv",
@@ -647,6 +656,7 @@ class MCPServer(_PluginBase, metaclass=SingletonClass):
         "auto_restart": True,
         "restart_delay": 5,
         "auth_token": "",
+        "require_auth": True,
         "mp_username": "admin",
         "mp_password": "",
         "enable_plugin_tools": True,
@@ -687,16 +697,22 @@ class MCPServer(_PluginBase, metaclass=SingletonClass):
         self._enable = config.get("enable", False)
 
         previous_server_type = self._config.get("server_type", "streamable")
+        previous_require_auth = self._config.get("require_auth", True)
+
         # update _config from config
         self._config.update(config.get("config", {}))
-        
-        current_server_type = self._config.get("server_type", "streamable")
-        server_type_changed = previous_server_type != current_server_type
 
-        if enable_changed or server_type_changed:
+        current_server_type = self._config.get("server_type", "streamable")
+        current_require_auth = self._config.get("require_auth", True)
+
+        server_type_changed = previous_server_type != current_server_type
+        auth_config_changed = previous_require_auth != current_require_auth
+
+        if enable_changed or server_type_changed or auth_config_changed:
             logger.info(
                 f"配置变化: enable={previous_enable}->{self._enable}, "
-                f"server_type={previous_server_type}->{current_server_type}"
+                f"server_type={previous_server_type}->{current_server_type}, "
+                f"require_auth={previous_require_auth}->{current_require_auth}"
             )
 
             # 如果插件从禁用变为启用，处理暂存的注册请求并通知其他插件
@@ -719,16 +735,16 @@ class MCPServer(_PluginBase, metaclass=SingletonClass):
             self._process_manager = ProcessManager(self)
 
         self._handle_server_operations(
-            enable_changed, server_type_changed
+            enable_changed, server_type_changed, auth_config_changed
         )
 
     def _handle_server_operations(
-        self, enable_changed: bool, server_type_changed: bool
+        self, enable_changed: bool, server_type_changed: bool, auth_config_changed: bool
     ):
         """根据配置变化处理服务器启动、停止、重启操作"""
 
-        if server_type_changed:
-            logger.info("检测到服务器类型变化，需要重启服务器")
+        if server_type_changed or auth_config_changed:
+            logger.info("检测到配置变化，需要重启服务器")
             if self._enable:
                 self._process_manager.restart_server()
             else:
@@ -1166,12 +1182,31 @@ class MCPServer(_PluginBase, metaclass=SingletonClass):
             enable = config_payload.get("enable", False)
             config = config_payload.get("config", {})
 
+            # 检测关键配置变化
+            previous_server_type = self._config.get("server_type", "streamable")
+            previous_require_auth = self._config.get("require_auth", True)
+
+            new_server_type = config.get("server_type", "streamable")
+            new_require_auth = config.get("require_auth", True)
+
+            server_type_changed = previous_server_type != new_server_type
+            auth_config_changed = previous_require_auth != new_require_auth
+
             # 保存配置
             self.update_config({"enable": enable, "config": config})
             # self.init_plugin(self.get_config())
 
+            # 构建响应消息
+            message = "配置已保存"
+            if server_type_changed:
+                message = "配置已保存，服务器类型已切换并重启"
+            elif auth_config_changed:
+                message = "配置已保存，认证配置已更新并重启服务器"
+
             return {
-                "message": "配置已保存",
+                "message": message,
+                "server_type_changed": server_type_changed,
+                "auth_config_changed": auth_config_changed,
                 "saved_config": self._get_config(),
             }
 

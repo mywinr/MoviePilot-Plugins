@@ -254,6 +254,11 @@ JSON格式配置如下：
 ### 直连
 
 通过支持自定义Header的客户端,如[Cherry Studio](https://github.com/CherryHQ/cherry-studio)，按照上文配置即可连接。
+astrbot最新版也已支持自定义header，可以直连。
+
+### 关闭API Key认证后直连
+
+某些客户端如lobe-chat不支持自定义header，也就无法填写认证的key，导致无法直连。如果mcp server不暴露在公网上，在保证安全性的情况下可以选择关闭API key认证，这样直接填写服务器地址即可直连。
 
 ### MCPHub中转
 
@@ -320,16 +325,6 @@ networks:
 
 安装部署这里就不再赘述了，lobe的MCP入口比较难找，在 助手 -> 插件设置 -> 自定义插件里，选择 Streamable HTTP模式，Streamable HTTP Endpoint URL直接填`http://172.17.0.1:3007/mcp`，然后保存即可。
 
-#### [Astrbot](https://github.com/AstrBotDevs/AstrBot)
-
-项目介绍、安装跳过。部署好之后在MCP设置中添加MCP服务器，配置如下：
-
-```json
-{
-  "url": "http://172.17.0.1:3007/sse"
-}
-```
-和lobe不同，astrbot仅支持sse。
 
 其它的玩法大家自行摸索哈。有同学可能要问了，为什么不直接在lobe或者astrbot中使用`http://172.17.0.1:3112/mcp/?token=xxxxx`的方式，而非要用mcphub中转一下呢？好问题，我也觉得中间转一次很傻，但是lobe和astrbot直接使用上述链接就是走不通，具体原理我也不太懂了，有同学试出来可以和大家分享一下。
 

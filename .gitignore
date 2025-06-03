@@ -165,3 +165,8 @@ node_modules/
 logsclean/
 mcpserver_bk/
 events.db
+test_*
+__federation_shared_vuetify/
+index-*
+date-*
+runtime-*

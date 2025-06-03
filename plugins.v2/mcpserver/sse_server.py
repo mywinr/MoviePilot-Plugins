@@ -263,6 +263,8 @@ def main():
     parser.add_argument("--moviepilot-port", type=int, default=3001, help="MoviePilot port")
     parser.add_argument("--auth-token", help="Authentication token")
     parser.add_argument("--access-token", help="MoviePilot access token")
+    parser.add_argument("--require-auth", action="store_true", help="Enable Bearer token authentication")
+    parser.add_argument("--no-auth", action="store_true", help="Disable Bearer token authentication")
 
     args = parser.parse_args()
 
@@ -277,7 +279,9 @@ def main():
             log_level=args.log_level,
             moviepilot_port=args.moviepilot_port,
             auth_token=args.auth_token,
-            access_token=args.access_token
+            access_token=args.access_token,
+            require_auth=args.require_auth,
+            no_auth=args.no_auth
         ))
     except KeyboardInterrupt:
         logger.info("收到中断信号，正在关闭服务器...")
@@ -293,12 +297,23 @@ async def run_server(
     log_level: str = "INFO",
     moviepilot_port: int = 3001,
     auth_token: str = None,
-    access_token: str = None
+    access_token: str = None,
+    require_auth: bool = False,
+    no_auth: bool = False
 ):
     """运行SSE MCP服务器"""
     logger = logging.getLogger(__name__)
 
     logger.info(f"正在启动MCP SSE服务器于 {host}:{port}")
+
+    # 确定认证配置
+    auth_enabled = require_auth and not no_auth
+    if no_auth:
+        logger.info("认证已禁用 (--no-auth)")
+    elif require_auth:
+        logger.info("认证已启用 (--require-auth)")
+    else:
+        logger.info("认证已禁用 (默认)")
 
     # 设置MoviePilot端口号
     from utils import set_moviepilot_port
@@ -387,7 +402,7 @@ async def run_server(
 
     # 创建中间件列表
     middleware = [
-        Middleware(BearerAuthMiddleware, token_manager=token_manager)
+        Middleware(BearerAuthMiddleware, token_manager=token_manager, require_auth=auth_enabled)
     ]
 
     # SSE端点处理器 - 使用ASGI格式，处理SSE连接和POST消息

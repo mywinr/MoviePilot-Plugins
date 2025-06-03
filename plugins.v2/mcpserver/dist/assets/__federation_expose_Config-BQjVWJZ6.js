@@ -71,10 +71,14 @@ const defaultConfig = {
   server_type: 'streamable',      // 默认使用streamable
   port: '3111',
   auth_token: '',
+  require_auth: true,             // 默认启用认证
   mp_username: 'admin',
   mp_password: '',
   dashboard_refresh_interval: 30, // 默认30秒
   dashboard_auto_refresh: true,   // 默认启用自动刷新
+  enable_plugin_tools: true,      // 默认启用插件工具
+  plugin_tool_timeout: 30,        // 默认30秒超时
+  max_plugin_tools: 100,          // 默认最大100个工具
 };
 
 // 记录原始启用状态
@@ -107,6 +111,11 @@ onMounted(() => {
         config.auth_token = props.initialConfig.config.auth_token;
       }
 
+      // 处理认证配置
+      if ('require_auth' in props.initialConfig.config) {
+        config.require_auth = props.initialConfig.config.require_auth;
+      }
+
       // 处理 MoviePilot 用户名
       if ('mp_username' in props.initialConfig.config) {
         config.mp_username = props.initialConfig.config.mp_username;
@@ -130,6 +139,17 @@ onMounted(() => {
       // 处理服务器类型
       if ('server_type' in props.initialConfig.config) {
         config.server_type = props.initialConfig.config.server_type;
+      }
+
+      // 处理插件工具配置
+      if ('enable_plugin_tools' in props.initialConfig.config) {
+        config.enable_plugin_tools = props.initialConfig.config.enable_plugin_tools;
+      }
+      if ('plugin_tool_timeout' in props.initialConfig.config) {
+        config.plugin_tool_timeout = props.initialConfig.config.plugin_tool_timeout;
+      }
+      if ('max_plugin_tools' in props.initialConfig.config) {
+        config.max_plugin_tools = props.initialConfig.config.max_plugin_tools;
       }
     }
 
@@ -162,10 +182,14 @@ async function saveConfig() {
         server_type: config.server_type,
         port: config.port,
         auth_token: config.auth_token,
+        require_auth: config.require_auth,
         mp_username: config.mp_username,
         mp_password: config.mp_password,
         dashboard_refresh_interval: config.dashboard_refresh_interval,
-        dashboard_auto_refresh: config.dashboard_auto_refresh
+        dashboard_auto_refresh: config.dashboard_auto_refresh,
+        enable_plugin_tools: config.enable_plugin_tools,
+        plugin_tool_timeout: config.plugin_tool_timeout,
+        max_plugin_tools: config.max_plugin_tools,
       }
     };
     console.log('保存配置:', configToSave);
@@ -189,6 +213,10 @@ async function saveConfig() {
         // 如果服务器类型发生变化，显示特殊提示
         if (response.server_type_changed) {
           successMessage.value = response.message || '配置已保存，服务器类型已切换并重启';
+        }
+        // 如果认证配置发生变化，显示特殊提示
+        else if (response.auth_config_changed) {
+          successMessage.value = response.message || '配置已保存，认证配置已更新并重启服务器';
         }
 
         console.log('配置保存成功:', response);
@@ -404,7 +432,7 @@ return (_ctx, _cache) => {
             }, {
               default: _withCtx(() => [
                 _createVNode(_component_v_icon, { left: "" }, {
-                  default: _withCtx(() => _cache[12] || (_cache[12] = [
+                  default: _withCtx(() => _cache[16] || (_cache[16] = [
                     _createTextVNode("mdi-close")
                   ])),
                   _: 1
@@ -415,7 +443,7 @@ return (_ctx, _cache) => {
           ]),
           default: _withCtx(() => [
             _createVNode(_component_v_card_title, null, {
-              default: _withCtx(() => _cache[11] || (_cache[11] = [
+              default: _withCtx(() => _cache[15] || (_cache[15] = [
                 _createTextVNode("插件配置")
               ])),
               _: 1
@@ -453,11 +481,11 @@ return (_ctx, _cache) => {
               ref_key: "form",
               ref: form,
               modelValue: isFormValid.value,
-              "onUpdate:modelValue": _cache[10] || (_cache[10] = $event => ((isFormValid).value = $event)),
+              "onUpdate:modelValue": _cache[14] || (_cache[14] = $event => ((isFormValid).value = $event)),
               onSubmit: _withModifiers(saveConfig, ["prevent"])
             }, {
               default: _withCtx(() => [
-                _cache[16] || (_cache[16] = _createElementVNode("div", { class: "text-subtitle-1 font-weight-bold mt-4 mb-2" }, "基本设置", -1)),
+                _cache[20] || (_cache[20] = _createElementVNode("div", { class: "text-subtitle-1 font-weight-bold mt-4 mb-2" }, "基本设置", -1)),
                 _createVNode(_component_v_row, null, {
                   default: _withCtx(() => [
                     _createVNode(_component_v_col, { cols: "12" }, {
@@ -477,7 +505,7 @@ return (_ctx, _cache) => {
                   ]),
                   _: 1
                 }),
-                _cache[17] || (_cache[17] = _createElementVNode("div", { class: "text-subtitle-1 font-weight-bold mt-4 mb-2" }, "MCP Server配置", -1)),
+                _cache[21] || (_cache[21] = _createElementVNode("div", { class: "text-subtitle-1 font-weight-bold mt-4 mb-2" }, "MCP Server配置", -1)),
                 _createVNode(_component_v_row, null, {
                   default: _withCtx(() => [
                     _createVNode(_component_v_col, {
@@ -525,76 +553,100 @@ return (_ctx, _cache) => {
                       md: "6"
                     }, {
                       default: _withCtx(() => [
-                        _createVNode(_component_v_text_field, {
-                          modelValue: config.auth_token,
-                          "onUpdate:modelValue": _cache[3] || (_cache[3] = $event => ((config.auth_token) = $event)),
-                          label: "API密钥",
-                          variant: "outlined",
-                          "append-inner-icon": showApiKey.value ? 'mdi-eye-off' : 'mdi-eye',
-                          type: showApiKey.value ? 'text' : 'password',
-                          "onClick:appendInner": _cache[4] || (_cache[4] = $event => (showApiKey.value = !showApiKey.value)),
-                          readonly: ""
-                        }, {
-                          append: _withCtx(() => [
-                            _createElementVNode("div", _hoisted_2, [
-                              _createVNode(_component_v_tooltip, { text: "复制API密钥" }, {
-                                activator: _withCtx(({ props }) => [
-                                  _createVNode(_component_v_btn, _mergeProps(props, {
-                                    icon: "",
-                                    variant: "text",
-                                    color: "info",
-                                    size: "small",
-                                    loading: copyingApiKey.value,
-                                    onClick: copyApiKey,
-                                    class: "mr-1"
-                                  }), {
-                                    default: _withCtx(() => [
-                                      _createVNode(_component_v_icon, null, {
-                                        default: _withCtx(() => _cache[13] || (_cache[13] = [
-                                          _createTextVNode("mdi-content-copy")
-                                        ])),
-                                        _: 1
-                                      })
-                                    ]),
-                                    _: 2
-                                  }, 1040, ["loading"])
-                                ]),
-                                _: 1
-                              }),
-                              _createVNode(_component_v_tooltip, { text: "生成新的API密钥" }, {
-                                activator: _withCtx(({ props }) => [
-                                  _createVNode(_component_v_btn, _mergeProps(props, {
-                                    icon: "",
-                                    variant: "text",
-                                    color: "warning",
-                                    size: "small",
-                                    loading: resettingApiKey.value,
-                                    onClick: resetApiKey
-                                  }), {
-                                    default: _withCtx(() => [
-                                      _createVNode(_component_v_icon, null, {
-                                        default: _withCtx(() => _cache[14] || (_cache[14] = [
-                                          _createTextVNode("mdi-key-change")
-                                        ])),
-                                        _: 1
-                                      })
-                                    ]),
-                                    _: 2
-                                  }, 1040, ["loading"])
-                                ]),
-                                _: 1
-                              })
-                            ])
-                          ]),
-                          _: 1
-                        }, 8, ["modelValue", "append-inner-icon", "type"])
+                        _createVNode(_component_v_switch, {
+                          modelValue: config.require_auth,
+                          "onUpdate:modelValue": _cache[3] || (_cache[3] = $event => ((config.require_auth) = $event)),
+                          label: "启用API认证",
+                          color: "primary",
+                          inset: "",
+                          hint: "是否要求客户端连接时提供API密钥进行认证",
+                          "persistent-hint": ""
+                        }, null, 8, ["modelValue"])
                       ]),
                       _: 1
                     })
                   ]),
                   _: 1
                 }),
-                _cache[18] || (_cache[18] = _createElementVNode("div", { class: "text-subtitle-1 font-weight-bold mt-4 mb-2" }, "MoviePilot 认证配置", -1)),
+                (config.require_auth)
+                  ? (_openBlock(), _createBlock(_component_v_row, { key: 0 }, {
+                      default: _withCtx(() => [
+                        _createVNode(_component_v_col, {
+                          cols: "12",
+                          md: "6"
+                        }, {
+                          default: _withCtx(() => [
+                            _createVNode(_component_v_text_field, {
+                              modelValue: config.auth_token,
+                              "onUpdate:modelValue": _cache[4] || (_cache[4] = $event => ((config.auth_token) = $event)),
+                              label: "API密钥",
+                              variant: "outlined",
+                              "append-inner-icon": showApiKey.value ? 'mdi-eye-off' : 'mdi-eye',
+                              type: showApiKey.value ? 'text' : 'password',
+                              "onClick:appendInner": _cache[5] || (_cache[5] = $event => (showApiKey.value = !showApiKey.value)),
+                              readonly: ""
+                            }, {
+                              append: _withCtx(() => [
+                                _createElementVNode("div", _hoisted_2, [
+                                  _createVNode(_component_v_tooltip, { text: "复制API密钥" }, {
+                                    activator: _withCtx(({ props }) => [
+                                      _createVNode(_component_v_btn, _mergeProps(props, {
+                                        icon: "",
+                                        variant: "text",
+                                        color: "info",
+                                        size: "small",
+                                        loading: copyingApiKey.value,
+                                        onClick: copyApiKey,
+                                        class: "mr-1"
+                                      }), {
+                                        default: _withCtx(() => [
+                                          _createVNode(_component_v_icon, null, {
+                                            default: _withCtx(() => _cache[17] || (_cache[17] = [
+                                              _createTextVNode("mdi-content-copy")
+                                            ])),
+                                            _: 1
+                                          })
+                                        ]),
+                                        _: 2
+                                      }, 1040, ["loading"])
+                                    ]),
+                                    _: 1
+                                  }),
+                                  _createVNode(_component_v_tooltip, { text: "生成新的API密钥" }, {
+                                    activator: _withCtx(({ props }) => [
+                                      _createVNode(_component_v_btn, _mergeProps(props, {
+                                        icon: "",
+                                        variant: "text",
+                                        color: "warning",
+                                        size: "small",
+                                        loading: resettingApiKey.value,
+                                        onClick: resetApiKey
+                                      }), {
+                                        default: _withCtx(() => [
+                                          _createVNode(_component_v_icon, null, {
+                                            default: _withCtx(() => _cache[18] || (_cache[18] = [
+                                              _createTextVNode("mdi-key-change")
+                                            ])),
+                                            _: 1
+                                          })
+                                        ]),
+                                        _: 2
+                                      }, 1040, ["loading"])
+                                    ]),
+                                    _: 1
+                                  })
+                                ])
+                              ]),
+                              _: 1
+                            }, 8, ["modelValue", "append-inner-icon", "type"])
+                          ]),
+                          _: 1
+                        })
+                      ]),
+                      _: 1
+                    }))
+                  : _createCommentVNode("", true),
+                _cache[22] || (_cache[22] = _createElementVNode("div", { class: "text-subtitle-1 font-weight-bold mt-4 mb-2" }, "MoviePilot 认证配置", -1)),
                 _createVNode(_component_v_row, null, {
                   default: _withCtx(() => [
                     _createVNode(_component_v_col, {
@@ -604,7 +656,7 @@ return (_ctx, _cache) => {
                       default: _withCtx(() => [
                         _createVNode(_component_v_text_field, {
                           modelValue: config.mp_username,
-                          "onUpdate:modelValue": _cache[5] || (_cache[5] = $event => ((config.mp_username) = $event)),
+                          "onUpdate:modelValue": _cache[6] || (_cache[6] = $event => ((config.mp_username) = $event)),
                           label: "MoviePilot 用户名",
                           variant: "outlined",
                           hint: "用于获取 MoviePilot 的 access_token",
@@ -621,7 +673,7 @@ return (_ctx, _cache) => {
                       default: _withCtx(() => [
                         _createVNode(_component_v_text_field, {
                           modelValue: config.mp_password,
-                          "onUpdate:modelValue": _cache[6] || (_cache[6] = $event => ((config.mp_password) = $event)),
+                          "onUpdate:modelValue": _cache[7] || (_cache[7] = $event => ((config.mp_password) = $event)),
                           label: "MoviePilot 密码",
                           variant: "outlined",
                           hint: "用于获取 MoviePilot 的 access_token",
@@ -629,7 +681,7 @@ return (_ctx, _cache) => {
                           rules: [v => !!v || 'MoviePilot密码不能为空'],
                           "append-inner-icon": showMpPassword.value ? 'mdi-eye-off' : 'mdi-eye',
                           type: showMpPassword.value ? 'text' : 'password',
-                          "onClick:appendInner": _cache[7] || (_cache[7] = $event => (showMpPassword.value = !showMpPassword.value))
+                          "onClick:appendInner": _cache[8] || (_cache[8] = $event => (showMpPassword.value = !showMpPassword.value))
                         }, null, 8, ["modelValue", "rules", "append-inner-icon", "type"])
                       ]),
                       _: 1
@@ -637,7 +689,7 @@ return (_ctx, _cache) => {
                   ]),
                   _: 1
                 }),
-                _cache[19] || (_cache[19] = _createElementVNode("div", { class: "text-subtitle-1 font-weight-bold mt-4 mb-2" }, "Dashboard 配置", -1)),
+                _cache[23] || (_cache[23] = _createElementVNode("div", { class: "text-subtitle-1 font-weight-bold mt-4 mb-2" }, "Dashboard 配置", -1)),
                 _createVNode(_component_v_row, null, {
                   default: _withCtx(() => [
                     _createVNode(_component_v_col, {
@@ -647,7 +699,7 @@ return (_ctx, _cache) => {
                       default: _withCtx(() => [
                         _createVNode(_component_v_select, {
                           modelValue: config.dashboard_refresh_interval,
-                          "onUpdate:modelValue": _cache[8] || (_cache[8] = $event => ((config.dashboard_refresh_interval) = $event)),
+                          "onUpdate:modelValue": _cache[9] || (_cache[9] = $event => ((config.dashboard_refresh_interval) = $event)),
                           label: "状态刷新间隔",
                           variant: "outlined",
                           items: refreshIntervalOptions,
@@ -658,7 +710,7 @@ return (_ctx, _cache) => {
                         }, {
                           "prepend-inner": _withCtx(() => [
                             _createVNode(_component_v_icon, { color: "primary" }, {
-                              default: _withCtx(() => _cache[15] || (_cache[15] = [
+                              default: _withCtx(() => _cache[19] || (_cache[19] = [
                                 _createTextVNode("mdi-refresh")
                               ])),
                               _: 1
@@ -676,7 +728,7 @@ return (_ctx, _cache) => {
                       default: _withCtx(() => [
                         _createVNode(_component_v_switch, {
                           modelValue: config.dashboard_auto_refresh,
-                          "onUpdate:modelValue": _cache[9] || (_cache[9] = $event => ((config.dashboard_auto_refresh) = $event)),
+                          "onUpdate:modelValue": _cache[10] || (_cache[10] = $event => ((config.dashboard_auto_refresh) = $event)),
                           label: "启用自动刷新",
                           color: "primary",
                           inset: "",
@@ -688,7 +740,74 @@ return (_ctx, _cache) => {
                     })
                   ]),
                   _: 1
-                })
+                }),
+                _cache[24] || (_cache[24] = _createElementVNode("div", { class: "text-subtitle-1 font-weight-bold mt-4 mb-2" }, "插件工具配置", -1)),
+                _createVNode(_component_v_row, null, {
+                  default: _withCtx(() => [
+                    _createVNode(_component_v_col, { cols: "12" }, {
+                      default: _withCtx(() => [
+                        _createVNode(_component_v_switch, {
+                          modelValue: config.enable_plugin_tools,
+                          "onUpdate:modelValue": _cache[11] || (_cache[11] = $event => ((config.enable_plugin_tools) = $event)),
+                          label: "启用插件工具",
+                          color: "primary",
+                          inset: "",
+                          hint: "允许其他插件向MCP Server注册自定义工具",
+                          "persistent-hint": ""
+                        }, null, 8, ["modelValue"])
+                      ]),
+                      _: 1
+                    })
+                  ]),
+                  _: 1
+                }),
+                (config.enable_plugin_tools)
+                  ? (_openBlock(), _createBlock(_component_v_row, { key: 1 }, {
+                      default: _withCtx(() => [
+                        _createVNode(_component_v_col, {
+                          cols: "12",
+                          md: "6"
+                        }, {
+                          default: _withCtx(() => [
+                            _createVNode(_component_v_text_field, {
+                              modelValue: config.plugin_tool_timeout,
+                              "onUpdate:modelValue": _cache[12] || (_cache[12] = $event => ((config.plugin_tool_timeout) = $event)),
+                              label: "工具执行超时时间(秒)",
+                              variant: "outlined",
+                              type: "number",
+                              min: "5",
+                              max: "300",
+                              hint: "插件工具执行的最大超时时间",
+                              "persistent-hint": "",
+                              rules: [v => !!v || '超时时间不能为空', v => (parseInt(v) >= 5 && parseInt(v) <= 300) || '超时时间必须在5-300秒之间']
+                            }, null, 8, ["modelValue", "rules"])
+                          ]),
+                          _: 1
+                        }),
+                        _createVNode(_component_v_col, {
+                          cols: "12",
+                          md: "6"
+                        }, {
+                          default: _withCtx(() => [
+                            _createVNode(_component_v_text_field, {
+                              modelValue: config.max_plugin_tools,
+                              "onUpdate:modelValue": _cache[13] || (_cache[13] = $event => ((config.max_plugin_tools) = $event)),
+                              label: "最大工具数量",
+                              variant: "outlined",
+                              type: "number",
+                              min: "10",
+                              max: "1000",
+                              hint: "允许注册的最大插件工具数量",
+                              "persistent-hint": "",
+                              rules: [v => !!v || '最大工具数量不能为空', v => (parseInt(v) >= 10 && parseInt(v) <= 1000) || '最大工具数量必须在10-1000之间']
+                            }, null, 8, ["modelValue", "rules"])
+                          ]),
+                          _: 1
+                        })
+                      ]),
+                      _: 1
+                    }))
+                  : _createCommentVNode("", true)
               ]),
               _: 1
             }, 8, ["modelValue"])
@@ -702,7 +821,7 @@ return (_ctx, _cache) => {
               onClick: resetForm,
               variant: "text"
             }, {
-              default: _withCtx(() => _cache[20] || (_cache[20] = [
+              default: _withCtx(() => _cache[25] || (_cache[25] = [
                 _createTextVNode("重置")
               ])),
               _: 1
@@ -713,7 +832,7 @@ return (_ctx, _cache) => {
               "prepend-icon": "mdi-arrow-left",
               variant: "text"
             }, {
-              default: _withCtx(() => _cache[21] || (_cache[21] = [
+              default: _withCtx(() => _cache[26] || (_cache[26] = [
                 _createTextVNode("返回服务器状态")
               ])),
               _: 1
@@ -725,7 +844,7 @@ return (_ctx, _cache) => {
               onClick: saveConfig,
               loading: saving.value
             }, {
-              default: _withCtx(() => _cache[22] || (_cache[22] = [
+              default: _withCtx(() => _cache[27] || (_cache[27] = [
                 _createTextVNode("保存配置")
               ])),
               _: 1
@@ -741,6 +860,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const ConfigComponent = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-c69d528d"]]);
+const ConfigComponent = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-1f7e4024"]]);
 
 export { ConfigComponent as default };
