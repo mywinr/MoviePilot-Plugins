@@ -14,6 +14,7 @@ from typing import List, Tuple, Dict, Any, Optional
 from pathlib import Path
 import psutil
 from app.utils.singleton import SingletonClass
+from app.utils.system import SystemUtils
 
 from app.log import logger
 from app.plugins import _PluginBase
@@ -619,7 +620,7 @@ class MCPServer(_PluginBase, metaclass=SingletonClass):
     plugin_name = "MCP Server"
     plugin_desc = "使用MCP客户端通过大模型来操作MoviePilot"
     plugin_icon = "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/mcp.png"
-    plugin_version = "1.9"
+    plugin_version = "2.0"
     plugin_author = "DzAvril"
     author_url = "https://github.com/DzAvril"
     plugin_config_prefix = "mcpserver_"
@@ -661,7 +662,7 @@ class MCPServer(_PluginBase, metaclass=SingletonClass):
 
         self._plugin_dir = Path(__file__).parent.absolute()
         self._venv_path = self._plugin_dir / self._config["venv_dir"]
-        self._python_bin = self._venv_path / "bin" / "python"
+        self._python_bin = self._venv_path / "bin" / "python" if not SystemUtils.is_windows() else self._venv_path / "Scripts" / "python.exe"
 
         # 创建ProcessManager实例，它会自动清理冲突的进程
         self._process_manager = ProcessManager(self)
