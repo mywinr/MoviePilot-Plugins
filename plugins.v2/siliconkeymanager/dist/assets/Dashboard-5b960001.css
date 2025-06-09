@@ -1,0 +1,20 @@
+
+.dashboard-card[data-v-817cc9fd] {
+  height: 100%;
+}
+.dashboard-content[data-v-817cc9fd] {
+  height: 100%;
+}
+.plugin-logo[data-v-817cc9fd] {
+  border-radius: 8px;
+}
+.status-header[data-v-817cc9fd] {
+  border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  padding-bottom: 16px;
+}
+.metric-card[data-v-817cc9fd] {
+  transition: transform 0.2s ease-in-out;
+}
+.metric-card[data-v-817cc9fd]:hover {
+  transform: translateY(-2px);
+}

@@ -1,0 +1,7 @@
+
+.metric-card[data-v-707b0fb5] {
+  transition: all 0.3s ease;
+}
+.metric-card[data-v-707b0fb5]:hover {
+  transform: scale(1.02);
+}

@@ -49,6 +49,13 @@ class SiliconKeyManager(_PluginBase):
     # 缓存
     _balance_cache = {}
     _lock = threading.Lock()
+    _scheduler = None
+
+    def __init__(self):
+        """初始化插件"""
+        super().__init__()
+        # 确保调度器属性存在
+        self._scheduler = None
 
     def init_plugin(self, config: dict = None):
         """初始化插件"""
@@ -66,28 +73,41 @@ class SiliconKeyManager(_PluginBase):
 
         if self._enabled:
             # 启动定时任务
-            self._scheduler.add_job(
-                func=self._check_keys_task,
-                trigger=CronTrigger.from_crontab(self._cron),
-                id=f"{self.plugin_name}_check",
-                name=f"{self.plugin_name}定时检查",
-                misfire_grace_time=60
-            )
+            try:
+                from apscheduler.schedulers.background import BackgroundScheduler
+                from app.core.config import settings
 
-            # 立即运行一次
-            if self._run_once:
+                # 创建调度器实例
+                if not self._scheduler:
+                    self._scheduler = BackgroundScheduler(timezone=settings.TZ)
+                    self._scheduler.start()
+
                 self._scheduler.add_job(
                     func=self._check_keys_task,
-                    trigger="date",
-                    run_date=datetime.now() + timedelta(seconds=3),
-                    id=f"{self.plugin_name}_run_once",
-                    name=f"{self.plugin_name}立即运行"
+                    trigger=CronTrigger.from_crontab(self._cron),
+                    id=f"{self.plugin_name}_check",
+                    name=f"{self.plugin_name}定时检查",
+                    misfire_grace_time=60
                 )
-                # 重置运行一次标志
-                self._run_once = False
-                self.__update_config()
 
-            logger.info(f"硅基KEY管理插件已启动，检查周期：{self._cron}")
+                # 立即运行一次
+                if self._run_once:
+                    self._scheduler.add_job(
+                        func=self._check_keys_task,
+                        trigger="date",
+                        run_date=datetime.now() + timedelta(seconds=3),
+                        id=f"{self.plugin_name}_run_once",
+                        name=f"{self.plugin_name}立即运行"
+                    )
+                    # 重置运行一次标志
+                    self._run_once = False
+                    self.__update_config()
+
+                logger.info(f"硅基KEY管理插件已启动，检查周期：{self._cron}")
+
+            except Exception as e:
+                logger.error(f"启动硅基KEY管理定时任务失败：{str(e)}", exc_info=True)
+                self._scheduler = None
 
     def get_state(self) -> bool:
         """获取插件状态"""
@@ -96,8 +116,11 @@ class SiliconKeyManager(_PluginBase):
     def stop_service(self):
         """停止插件服务"""
         try:
-            if self._scheduler:
+            if hasattr(self, '_scheduler') and self._scheduler:
                 self._scheduler.remove_all_jobs()
+                if self._scheduler.running:
+                    self._scheduler.shutdown(wait=False)
+                self._scheduler = None
                 logger.info("硅基KEY管理插件定时任务已停止")
         except Exception as e:
             logger.error(f"停止硅基KEY管理插件服务时出错: {e}")
@@ -128,40 +151,7 @@ class SiliconKeyManager(_PluginBase):
             }
         ]
 
-    def get_api(self) -> List[Dict[str, Any]]:
-        """获取插件API"""
-        return [
-            {
-                "path": "/keys",
-                "endpoint": self._get_keys,
-                "methods": ["GET"],
-                "summary": "获取所有API keys"
-            },
-            {
-                "path": "/keys/add",
-                "endpoint": self._add_keys,
-                "methods": ["POST"],
-                "summary": "添加API keys"
-            },
-            {
-                "path": "/keys/delete",
-                "endpoint": self._delete_keys,
-                "methods": ["POST"],
-                "summary": "删除API keys"
-            },
-            {
-                "path": "/keys/check",
-                "endpoint": self._check_keys_api,
-                "methods": ["POST"],
-                "summary": "检查API keys"
-            },
-            {
-                "path": "/keys/stats",
-                "endpoint": self._get_stats,
-                "methods": ["GET"],
-                "summary": "获取统计信息"
-            }
-        ]
+
 
     @staticmethod
     def get_render_mode() -> Tuple[str, Optional[str]]:
@@ -195,6 +185,8 @@ class SiliconKeyManager(_PluginBase):
 
     def get_dashboard(self, key: str = "", **kwargs) -> Optional[Tuple[Dict[str, Any], Dict[str, Any], Optional[List[dict]]]]:
         """获取插件仪表盘页面 - Vue模式"""
+        # 忽略未使用的参数警告
+        _ = key, kwargs
         return (
             {"cols": 12, "md": 6},
             {
@@ -223,6 +215,82 @@ class SiliconKeyManager(_PluginBase):
             "run_once": self._run_once
         }
         self.update_config(config)
+
+    def _check_api_key(self, api_key: str) -> Optional[float]:
+        """检查单个API key的余额"""
+        with self._lock:
+            # 检查缓存
+            cache_key = api_key
+            if cache_key in self._balance_cache:
+                cache_time, balance = self._balance_cache[cache_key]
+                if datetime.now() - cache_time < timedelta(seconds=self._cache_ttl):
+                    logger.debug(f'使用缓存的API key {api_key[:8]}... 余额: {balance}')
+                    return balance
+
+        logger.info(f'检查API key: {api_key[:8]}...')
+        try:
+            response = requests.get(
+                'https://api.siliconflow.cn/v1/user/info',
+                headers={'Authorization': f'Bearer {api_key}'},
+                timeout=self._timeout
+            )
+            response.encoding = 'utf-8'
+
+            if response.ok:
+                try:
+                    balance_data = response.json()
+                    if (isinstance(balance_data, dict) and
+                        'data' in balance_data and
+                        isinstance(balance_data['data'], dict) and
+                        'totalBalance' in balance_data['data']):
+
+                        balance = float(balance_data['data']['totalBalance'])
+
+                        # 更新缓存
+                        with self._lock:
+                            self._balance_cache[cache_key] = (datetime.now(), balance)
+
+                        logger.info(f'API key {api_key[:8]}... 有效，余额: {balance}')
+                        return balance
+                    else:
+                        logger.warning(f"API key {api_key[:8]}... 响应结构无效: {balance_data}")
+                        with self._lock:
+                            self._balance_cache[cache_key] = (datetime.now(), None)
+                        return None
+
+                except (ValueError, TypeError, json.JSONDecodeError) as e:
+                    logger.warning(f'解析API key {api_key[:8]}... 响应失败: {e}')
+                    with self._lock:
+                        self._balance_cache[cache_key] = (datetime.now(), None)
+                    return None
+            else:
+                logger.warning(f'API key {api_key[:8]}... 无效或检查出错, 响应: {response.status_code}')
+                if response.status_code in [401, 403, 404]:
+                    # 无效key，缓存为0
+                    with self._lock:
+                        self._balance_cache[cache_key] = (datetime.now(), 0)
+                    return 0
+                else:
+                    # 其他错误，缓存为None
+                    with self._lock:
+                        self._balance_cache[cache_key] = (datetime.now(), None)
+                    return None
+
+        except requests.exceptions.Timeout:
+            logger.error(f'检查API key {api_key[:8]}... 时超时')
+            with self._lock:
+                self._balance_cache[cache_key] = (datetime.now(), None)
+            return None
+        except requests.exceptions.RequestException as e:
+            logger.error(f'检查API key {api_key[:8]}... 时网络错误: {e}')
+            with self._lock:
+                self._balance_cache[cache_key] = (datetime.now(), None)
+            return None
+        except Exception as e:
+            logger.error(f'检查API key {api_key[:8]}... 时未知错误: {e}', exc_info=True)
+            with self._lock:
+                self._balance_cache[cache_key] = (datetime.now(), None)
+            return None
 
     def _get_keys_data(self, key_type: str = "public") -> List[Dict[str, Any]]:
         """从数据库获取keys数据"""
@@ -816,120 +884,7 @@ class SiliconKeyManager(_PluginBase):
             logger.error(f"检查{key_type} keys时出错: {e}", exc_info=True)
             return 0, 0, 0
 
-    # API方法
-    def _get_keys(self) -> Dict[str, Any]:
-        """获取所有keys"""
-        try:
-            public_keys = self._get_keys_data("public")
-            private_keys = self._get_keys_data("private")
 
-            # 隐藏完整key，只显示前后几位
-            def mask_key(key: str) -> str:
-                if len(key) <= 16:
-                    return key[:4] + "*" * (len(key) - 8) + key[-4:]
-                return key[:8] + "*" * (len(key) - 16) + key[-8:]
-
-            # 处理公有keys
-            public_display = []
-            for key_info in public_keys:
-                display_info = key_info.copy()
-                display_info["masked_key"] = mask_key(key_info["key"])
-                display_info.pop("key", None)  # 移除完整key
-                public_display.append(display_info)
-
-            # 处理私有keys
-            private_display = []
-            for key_info in private_keys:
-                display_info = key_info.copy()
-                display_info["masked_key"] = mask_key(key_info["key"])
-                display_info.pop("key", None)  # 移除完整key
-                private_display.append(display_info)
-
-            return {
-                "status": "success",
-                "public_keys": public_display,
-                "private_keys": private_display,
-                "public_count": len(public_keys),
-                "private_count": len(private_keys),
-                "total_count": len(public_keys) + len(private_keys)
-            }
-
-        except Exception as e:
-            logger.error(f"获取keys时出错: {e}", exc_info=True)
-            return {
-                "status": "error",
-                "message": f"获取keys时出错: {str(e)}"
-            }
-
-    def _get_stats(self) -> Dict[str, Any]:
-        """获取统计信息"""
-        try:
-            public_keys = self._get_keys_data("public")
-            private_keys = self._get_keys_data("private")
-
-            # 统计公有keys
-            public_stats = self._calculate_key_stats(public_keys)
-
-            # 统计私有keys
-            private_stats = self._calculate_key_stats(private_keys)
-
-            # 总体统计
-            total_stats = {
-                "total_count": public_stats["total_count"] + private_stats["total_count"],
-                "valid_count": public_stats["valid_count"] + private_stats["valid_count"],
-                "invalid_count": public_stats["invalid_count"] + private_stats["invalid_count"],
-                "failed_count": public_stats["failed_count"] + private_stats["failed_count"],
-                "total_balance": public_stats["total_balance"] + private_stats["total_balance"]
-            }
-
-            return {
-                "status": "success",
-                "public_stats": public_stats,
-                "private_stats": private_stats,
-                "total_stats": total_stats,
-                "config": {
-                    "enabled": self._enabled,
-                    "cron": self._cron,
-                    "min_balance_limit": self._min_balance_limit,
-                    "enable_notification": self._enable_notification
-                }
-            }
-
-        except Exception as e:
-            logger.error(f"获取统计信息时出错: {e}", exc_info=True)
-            return {
-                "status": "error",
-                "message": f"获取统计信息时出错: {str(e)}"
-            }
-
-    def _calculate_key_stats(self, keys_data: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """计算keys统计信息"""
-        total_count = len(keys_data)
-        valid_count = 0
-        invalid_count = 0
-        failed_count = 0
-        total_balance = 0.0
-
-        for key_info in keys_data:
-            status = key_info.get("status", "unknown")
-            balance = key_info.get("balance", 0)
-
-            if status == "valid":
-                valid_count += 1
-                if isinstance(balance, (int, float)) and balance > 0:
-                    total_balance += balance
-            elif status == "invalid":
-                invalid_count += 1
-            elif status == "check_failed":
-                failed_count += 1
-
-        return {
-            "total_count": total_count,
-            "valid_count": valid_count,
-            "invalid_count": invalid_count,
-            "failed_count": failed_count,
-            "total_balance": round(total_balance, 4)
-        }
 
     # --- Vue API Endpoints ---
     def _get_config(self) -> Dict[str, Any]:

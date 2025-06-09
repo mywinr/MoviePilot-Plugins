@@ -183,7 +183,9 @@ async function loadConfig() {
   loading.value = true
   try {
     const response = await props.api.get('plugin/SiliconKeyManager/config')
-    if (response) {
+    if (response && response.status === 'success') {
+      Object.assign(config, response.config)
+    } else if (response) {
       Object.assign(config, response)
     }
   } catch (error) {
