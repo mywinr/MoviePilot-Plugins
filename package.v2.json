@@ -78,5 +78,18 @@
             "v1.1": "功能完善",
             "v1.0": "新建"
         }
+    },
+    "SiliconKeyManager": {
+        "name": "硅基KEY管理",
+        "description": "管理硅基流API keys，支持余额检查、自动清理、分类管理等功能",
+        "labels": "MCP",
+        "version": "1.0",
+        "icon": "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/heatmonitor.png",
+        "author": "DzAvril",
+        "level": 1,
+        "v2": true,
+        "history": {
+            "v1.0": "新建"
+        }
     }
 }
