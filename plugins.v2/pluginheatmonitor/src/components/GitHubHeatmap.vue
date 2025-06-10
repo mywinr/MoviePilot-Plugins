@@ -427,24 +427,38 @@ function getMaxDayContribution(pluginData) {
 
 function getCurrentStreak(pluginData) {
   if (!pluginData?.dayData) return 0
-  // 简化的连续天数计算（排除历史数据）
-  const yearData = Object.entries(pluginData.dayData)
-    .filter(([date, dayDataItem]) => {
-      const year = new Date(date).getFullYear()
-      const isHistorical = isHistoricalData(dayDataItem)
-      return year === selectedYear.value && !isHistorical
-    })
-    .sort(([a], [b]) => new Date(b) - new Date(a))
 
+  // 正确的连续天数计算：从今天开始往前推，检查连续性
+  const today = new Date()
   let streak = 0
-  for (const [, dayDataItem] of yearData) {
-    const value = getDayValue(dayDataItem)
-    if (value > 0) {
-      streak++
+  let currentDate = new Date(today)
+
+  // 从今天开始往前检查每一天
+  while (currentDate.getFullYear() === selectedYear.value) {
+    const dateStr = currentDate.getFullYear() + '-' +
+                   String(currentDate.getMonth() + 1).padStart(2, '0') + '-' +
+                   String(currentDate.getDate()).padStart(2, '0')
+
+    const dayDataItem = pluginData.dayData[dateStr]
+
+    // 检查这一天是否有数据且不是历史数据
+    if (dayDataItem && !isHistoricalData(dayDataItem)) {
+      const value = getDayValue(dayDataItem)
+      if (value > 0) {
+        streak++
+      } else {
+        // 遇到没有数据的天，停止计数
+        break
+      }
     } else {
+      // 遇到没有数据的天，停止计数
       break
     }
+
+    // 往前推一天
+    currentDate.setDate(currentDate.getDate() - 1)
   }
+
   return streak
 }
 
