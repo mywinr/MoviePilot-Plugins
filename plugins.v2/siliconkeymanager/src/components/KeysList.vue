@@ -41,9 +41,14 @@
         :items="keys"
         :items-per-page="10"
         show-select
-        item-value="masked_key"
+        item-value="key"
         class="elevation-1"
       >
+        <!-- API Key列 -->
+        <template v-slot:item.key="{ item }">
+          <code class="text-caption key-text">{{ maskKey(item.key) }}</code>
+        </template>
+
         <!-- 状态列 -->
         <template v-slot:item.status="{ item }">
           <v-chip
@@ -141,13 +146,22 @@ const deleteDialog = ref(false)
 
 // 表格头部
 const headers = [
-  { title: 'API Key', key: 'masked_key', sortable: false },
+  { title: 'API Key', key: 'key', sortable: false },
   { title: '状态', key: 'status', sortable: true },
   { title: '余额', key: 'balance', sortable: true },
   { title: '最后检查', key: 'last_check', sortable: true },
   { title: '添加时间', key: 'added_time', sortable: true },
   { title: '操作', key: 'actions', sortable: false, width: '120px' }
 ]
+
+// 工具函数：隐藏完整key，只显示前后几位
+function maskKey(key) {
+  if (!key) return ''
+  if (key.length <= 16) {
+    return key.slice(0, 4) + "*".repeat(key.length - 8) + key.slice(-4)
+  }
+  return key.slice(0, 8) + "*".repeat(key.length - 16) + key.slice(-8)
+}
 
 // 方法
 function getStatusColor(status) {
@@ -196,8 +210,8 @@ async function checkSelected() {
   checking.value = true
   try {
     // 获取选中keys的索引
-    const indices = selectedKeys.value.map(maskedKey => 
-      props.keys.findIndex(key => key.masked_key === maskedKey)
+    const indices = selectedKeys.value.map(keyValue =>
+      props.keys.findIndex(key => key.key === keyValue)
     ).filter(index => index !== -1)
 
     emit('check', indices, props.keyType)
@@ -216,8 +230,8 @@ async function confirmDelete() {
   deleting.value = true
   try {
     // 获取选中keys的索引
-    const indices = selectedKeys.value.map(maskedKey => 
-      props.keys.findIndex(key => key.masked_key === maskedKey)
+    const indices = selectedKeys.value.map(keyValue =>
+      props.keys.findIndex(key => key.key === keyValue)
     ).filter(index => index !== -1)
 
     emit('delete', indices, props.keyType)
@@ -246,3 +260,17 @@ async function deleteSingle(index) {
   }
 }
 </script>
+
+<style scoped>
+.key-text {
+  background: rgba(0, 0, 0, 0.05);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+</style>

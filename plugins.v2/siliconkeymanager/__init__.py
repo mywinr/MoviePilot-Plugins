@@ -22,7 +22,7 @@ class SiliconKeyManager(_PluginBase):
     plugin_name = "硅基KEY管理"
     plugin_desc = "管理硅基流API keys，支持余额检查、自动清理、分类管理等功能"
     plugin_icon = "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/siliconkey.png"
-    plugin_version = "1.1"
+    plugin_version = "1.2"
     plugin_author = "DzAvril"
     author_url = "https://github.com/DzAvril"
     plugin_config_prefix = "siliconkeymanager_"
@@ -473,37 +473,16 @@ class SiliconKeyManager(_PluginBase):
 
     # API方法
     def _get_keys(self) -> Dict[str, Any]:
-        """获取所有keys"""
+        """获取所有keys - 返回完整keys供前端处理"""
         try:
             public_keys = self._get_keys_data("public")
             private_keys = self._get_keys_data("private")
 
-            # 隐藏完整key，只显示前后几位
-            def mask_key(key: str) -> str:
-                if len(key) <= 16:
-                    return key[:4] + "*" * (len(key) - 8) + key[-4:]
-                return key[:8] + "*" * (len(key) - 16) + key[-8:]
-
-            # 处理公有keys
-            public_display = []
-            for key_info in public_keys:
-                display_info = key_info.copy()
-                display_info["masked_key"] = mask_key(key_info["key"])
-                display_info.pop("key", None)  # 移除完整key
-                public_display.append(display_info)
-
-            # 处理私有keys
-            private_display = []
-            for key_info in private_keys:
-                display_info = key_info.copy()
-                display_info["masked_key"] = mask_key(key_info["key"])
-                display_info.pop("key", None)  # 移除完整key
-                private_display.append(display_info)
-
+            # 直接返回完整的key数据，让前端处理mask和复制
             return {
                 "status": "success",
-                "public_keys": public_display,
-                "private_keys": private_display,
+                "public_keys": public_keys,
+                "private_keys": private_keys,
                 "public_count": len(public_keys),
                 "private_count": len(private_keys),
                 "total_count": len(public_keys) + len(private_keys)
@@ -1039,7 +1018,8 @@ class SiliconKeyManager(_PluginBase):
                 "methods": ["GET"],
                 "auth": "bear",
                 "summary": "获取统计信息"
-            }
+            },
+
         ]
 
     def _add_keys(self, payload: dict) -> Dict[str, Any]:
@@ -1194,3 +1174,5 @@ class SiliconKeyManager(_PluginBase):
         except Exception as e:
             logger.error(f"检查keys时出错：{str(e)}", exc_info=True)
             return {"status": "error", "message": f"检查keys时出错: {str(e)}"}
+
+

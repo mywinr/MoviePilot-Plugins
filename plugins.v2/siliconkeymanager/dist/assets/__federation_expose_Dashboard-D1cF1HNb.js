@@ -1,7 +1,5 @@
-import { importShared } from './__federation_fn_import-054b33c3.js';
-import { _ as _export_sfc } from './_plugin-vue_export-helper-c4c0bc37.js';
-
-const Dashboard_vue_vue_type_style_index_0_scoped_817cc9fd_lang = '';
+import { importShared } from './__federation_fn_import-JrT3xvdd.js';
+import { _ as _export_sfc } from './_plugin-vue_export-helper-pcqpp-6-.js';
 
 const {resolveComponent:_resolveComponent,createVNode:_createVNode,createElementVNode:_createElementVNode,openBlock:_openBlock,createElementBlock:_createElementBlock,createCommentVNode:_createCommentVNode,createTextVNode:_createTextVNode,withCtx:_withCtx,toDisplayString:_toDisplayString,createBlock:_createBlock} = await importShared('vue');
 
@@ -22,10 +20,10 @@ const _hoisted_7 = { class: "d-flex align-center justify-space-between" };
 const _hoisted_8 = { class: "d-flex align-center" };
 const _hoisted_9 = { class: "text-caption text-medium-emphasis" };
 const _hoisted_10 = { class: "d-flex align-center" };
-const _hoisted_11 = { class: "text-h6 font-weight-bold" };
-const _hoisted_12 = { class: "text-h6 font-weight-bold" };
-const _hoisted_13 = { class: "text-h6 font-weight-bold" };
-const _hoisted_14 = { class: "text-h6 font-weight-bold" };
+const _hoisted_11 = { class: "text-h6 font-weight-bold text-primary" };
+const _hoisted_12 = { class: "text-h6 font-weight-bold text-success" };
+const _hoisted_13 = { class: "text-h6 font-weight-bold text-warning" };
+const _hoisted_14 = { class: "text-h6 font-weight-bold text-info" };
 const _hoisted_15 = { class: "d-flex align-center justify-space-between" };
 const _hoisted_16 = { class: "d-flex align-center" };
 const _hoisted_17 = {
@@ -37,18 +35,16 @@ const _hoisted_19 = {
   key: 1,
   class: "dashboard-main"
 };
-const _hoisted_20 = { class: "status-overview mb-4" };
-const _hoisted_21 = { class: "d-flex align-center justify-space-between" };
-const _hoisted_22 = { class: "text-h5 font-weight-bold" };
-const _hoisted_23 = { class: "text-h5 font-weight-bold" };
-const _hoisted_24 = { class: "text-h5 font-weight-bold" };
-const _hoisted_25 = { class: "text-h5 font-weight-bold" };
-const _hoisted_26 = { class: "d-flex justify-space-between align-center mb-2" };
+const _hoisted_20 = { class: "text-h5 font-weight-bold text-primary" };
+const _hoisted_21 = { class: "text-h5 font-weight-bold text-success" };
+const _hoisted_22 = { class: "text-h5 font-weight-bold text-warning" };
+const _hoisted_23 = { class: "text-h5 font-weight-bold text-info" };
+const _hoisted_24 = { class: "d-flex justify-space-between align-center mb-2" };
+const _hoisted_25 = { class: "d-flex justify-space-between align-center mb-2" };
+const _hoisted_26 = { class: "d-flex justify-space-between align-center" };
 const _hoisted_27 = { class: "d-flex justify-space-between align-center mb-2" };
-const _hoisted_28 = { class: "d-flex justify-space-between align-center" };
-const _hoisted_29 = { class: "d-flex justify-space-between align-center mb-2" };
-const _hoisted_30 = { class: "d-flex justify-space-between align-center mb-2" };
-const _hoisted_31 = { class: "d-flex justify-space-between align-center" };
+const _hoisted_28 = { class: "d-flex justify-space-between align-center mb-2" };
+const _hoisted_29 = { class: "d-flex justify-space-between align-center" };
 
 const {ref,reactive,computed,onMounted,onUnmounted} = await importShared('vue');
 
@@ -78,7 +74,7 @@ const _sfc_main = {
 const props = __props;
 
 // 使用Vuetify的响应式断点
-useDisplay();
+const { xs, sm } = useDisplay();
 
 // 从插件配置中获取Dashboard设置
 const dashboardConfig = computed(() => {
@@ -207,7 +203,6 @@ return (_ctx, _cache) => {
   const _component_v_card_title = _resolveComponent("v-card-title");
   const _component_v_card_subtitle = _resolveComponent("v-card-subtitle");
   const _component_v_card_item = _resolveComponent("v-card-item");
-  const _component_v_alert = _resolveComponent("v-alert");
 
   return (_openBlock(), _createElementBlock("div", _hoisted_1, [
     (!__props.config?.attrs?.border)
@@ -299,14 +294,14 @@ return (_ctx, _cache) => {
                             }, {
                               default: _withCtx(() => [
                                 _createVNode(_component_v_card, {
-                                  variant: "tonal",
-                                  color: "primary",
-                                  class: "text-center pa-3"
+                                  variant: "outlined",
+                                  class: "text-center pa-3 stat-card"
                                 }, {
                                   default: _withCtx(() => [
                                     _createVNode(_component_v_icon, {
                                       size: "24",
-                                      class: "mb-2"
+                                      class: "mb-2",
+                                      color: "primary"
                                     }, {
                                       default: _withCtx(() => _cache[3] || (_cache[3] = [
                                         _createTextVNode("mdi-key-variant")
@@ -315,7 +310,7 @@ return (_ctx, _cache) => {
                                       __: [3]
                                     }),
                                     _createElementVNode("div", _hoisted_11, _toDisplayString(totalStats.total_count), 1),
-                                    _cache[4] || (_cache[4] = _createElementVNode("div", { class: "text-caption" }, "总Keys", -1))
+                                    _cache[4] || (_cache[4] = _createElementVNode("div", { class: "text-caption text-medium-emphasis" }, "总Keys", -1))
                                   ]),
                                   _: 1,
                                   __: [4]
@@ -329,14 +324,14 @@ return (_ctx, _cache) => {
                             }, {
                               default: _withCtx(() => [
                                 _createVNode(_component_v_card, {
-                                  variant: "tonal",
-                                  color: "success",
-                                  class: "text-center pa-3"
+                                  variant: "outlined",
+                                  class: "text-center pa-3 stat-card"
                                 }, {
                                   default: _withCtx(() => [
                                     _createVNode(_component_v_icon, {
                                       size: "24",
-                                      class: "mb-2"
+                                      class: "mb-2",
+                                      color: "success"
                                     }, {
                                       default: _withCtx(() => _cache[5] || (_cache[5] = [
                                         _createTextVNode("mdi-check-circle")
@@ -345,7 +340,7 @@ return (_ctx, _cache) => {
                                       __: [5]
                                     }),
                                     _createElementVNode("div", _hoisted_12, _toDisplayString(totalStats.valid_count), 1),
-                                    _cache[6] || (_cache[6] = _createElementVNode("div", { class: "text-caption" }, "有效", -1))
+                                    _cache[6] || (_cache[6] = _createElementVNode("div", { class: "text-caption text-medium-emphasis" }, "有效", -1))
                                   ]),
                                   _: 1,
                                   __: [6]
@@ -359,14 +354,14 @@ return (_ctx, _cache) => {
                             }, {
                               default: _withCtx(() => [
                                 _createVNode(_component_v_card, {
-                                  variant: "tonal",
-                                  color: "warning",
-                                  class: "text-center pa-3"
+                                  variant: "outlined",
+                                  class: "text-center pa-3 stat-card"
                                 }, {
                                   default: _withCtx(() => [
                                     _createVNode(_component_v_icon, {
                                       size: "24",
-                                      class: "mb-2"
+                                      class: "mb-2",
+                                      color: "warning"
                                     }, {
                                       default: _withCtx(() => _cache[7] || (_cache[7] = [
                                         _createTextVNode("mdi-alert-circle")
@@ -375,7 +370,7 @@ return (_ctx, _cache) => {
                                       __: [7]
                                     }),
                                     _createElementVNode("div", _hoisted_13, _toDisplayString(totalStats.failed_count), 1),
-                                    _cache[8] || (_cache[8] = _createElementVNode("div", { class: "text-caption" }, "失败", -1))
+                                    _cache[8] || (_cache[8] = _createElementVNode("div", { class: "text-caption text-medium-emphasis" }, "失败", -1))
                                   ]),
                                   _: 1,
                                   __: [8]
@@ -389,14 +384,14 @@ return (_ctx, _cache) => {
                             }, {
                               default: _withCtx(() => [
                                 _createVNode(_component_v_card, {
-                                  variant: "tonal",
-                                  color: "info",
-                                  class: "text-center pa-3"
+                                  variant: "outlined",
+                                  class: "text-center pa-3 stat-card"
                                 }, {
                                   default: _withCtx(() => [
                                     _createVNode(_component_v_icon, {
                                       size: "24",
-                                      class: "mb-2"
+                                      class: "mb-2",
+                                      color: "info"
                                     }, {
                                       default: _withCtx(() => _cache[9] || (_cache[9] = [
                                         _createTextVNode("mdi-currency-usd")
@@ -405,7 +400,7 @@ return (_ctx, _cache) => {
                                       __: [9]
                                     }),
                                     _createElementVNode("div", _hoisted_14, _toDisplayString(totalStats.total_balance.toFixed(2)), 1),
-                                    _cache[10] || (_cache[10] = _createElementVNode("div", { class: "text-caption" }, "总余额", -1))
+                                    _cache[10] || (_cache[10] = _createElementVNode("div", { class: "text-caption text-medium-emphasis" }, "总余额", -1))
                                   ]),
                                   _: 1,
                                   __: [10]
@@ -506,30 +501,6 @@ return (_ctx, _cache) => {
                       ])
                     ]))
                   : (_openBlock(), _createElementBlock("div", _hoisted_19, [
-                      _createElementVNode("div", _hoisted_20, [
-                        _createVNode(_component_v_alert, {
-                          type: "success",
-                          variant: "tonal",
-                          density: "compact",
-                          icon: "mdi-key"
-                        }, {
-                          default: _withCtx(() => [
-                            _createElementVNode("div", _hoisted_21, [
-                              _createElementVNode("span", null, "管理 " + _toDisplayString(totalStats.total_count) + " 个Keys，总余额 " + _toDisplayString(totalStats.total_balance.toFixed(2)), 1),
-                              _createVNode(_component_v_chip, {
-                                size: "small",
-                                variant: "text"
-                              }, {
-                                default: _withCtx(() => [
-                                  _createTextVNode(_toDisplayString(lastUpdateTime.value), 1)
-                                ]),
-                                _: 1
-                              })
-                            ])
-                          ]),
-                          _: 1
-                        })
-                      ]),
                       _createVNode(_component_v_row, {
                         dense: "",
                         class: "mb-4"
@@ -541,9 +512,8 @@ return (_ctx, _cache) => {
                           }, {
                             default: _withCtx(() => [
                               _createVNode(_component_v_card, {
-                                variant: "tonal",
-                                color: "primary",
-                                class: "text-center pa-4"
+                                variant: "outlined",
+                                class: "text-center pa-4 stat-card"
                               }, {
                                 default: _withCtx(() => [
                                   _createVNode(_component_v_icon, {
@@ -557,7 +527,7 @@ return (_ctx, _cache) => {
                                     _: 1,
                                     __: [13]
                                   }),
-                                  _createElementVNode("div", _hoisted_22, _toDisplayString(totalStats.total_count), 1),
+                                  _createElementVNode("div", _hoisted_20, _toDisplayString(totalStats.total_count), 1),
                                   _cache[14] || (_cache[14] = _createElementVNode("div", { class: "text-body-2 text-medium-emphasis" }, "总Keys数量", -1))
                                 ]),
                                 _: 1,
@@ -572,9 +542,8 @@ return (_ctx, _cache) => {
                           }, {
                             default: _withCtx(() => [
                               _createVNode(_component_v_card, {
-                                variant: "tonal",
-                                color: "success",
-                                class: "text-center pa-4"
+                                variant: "outlined",
+                                class: "text-center pa-4 stat-card"
                               }, {
                                 default: _withCtx(() => [
                                   _createVNode(_component_v_icon, {
@@ -588,7 +557,7 @@ return (_ctx, _cache) => {
                                     _: 1,
                                     __: [15]
                                   }),
-                                  _createElementVNode("div", _hoisted_23, _toDisplayString(totalStats.valid_count), 1),
+                                  _createElementVNode("div", _hoisted_21, _toDisplayString(totalStats.valid_count), 1),
                                   _cache[16] || (_cache[16] = _createElementVNode("div", { class: "text-body-2 text-medium-emphasis" }, "有效Keys", -1))
                                 ]),
                                 _: 1,
@@ -603,9 +572,8 @@ return (_ctx, _cache) => {
                           }, {
                             default: _withCtx(() => [
                               _createVNode(_component_v_card, {
-                                variant: "tonal",
-                                color: "warning",
-                                class: "text-center pa-4"
+                                variant: "outlined",
+                                class: "text-center pa-4 stat-card"
                               }, {
                                 default: _withCtx(() => [
                                   _createVNode(_component_v_icon, {
@@ -619,7 +587,7 @@ return (_ctx, _cache) => {
                                     _: 1,
                                     __: [17]
                                   }),
-                                  _createElementVNode("div", _hoisted_24, _toDisplayString(totalStats.failed_count), 1),
+                                  _createElementVNode("div", _hoisted_22, _toDisplayString(totalStats.failed_count), 1),
                                   _cache[18] || (_cache[18] = _createElementVNode("div", { class: "text-body-2 text-medium-emphasis" }, "检查失败", -1))
                                 ]),
                                 _: 1,
@@ -634,9 +602,8 @@ return (_ctx, _cache) => {
                           }, {
                             default: _withCtx(() => [
                               _createVNode(_component_v_card, {
-                                variant: "tonal",
-                                color: "info",
-                                class: "text-center pa-4"
+                                variant: "outlined",
+                                class: "text-center pa-4 stat-card"
                               }, {
                                 default: _withCtx(() => [
                                   _createVNode(_component_v_icon, {
@@ -650,7 +617,7 @@ return (_ctx, _cache) => {
                                     _: 1,
                                     __: [19]
                                   }),
-                                  _createElementVNode("div", _hoisted_25, _toDisplayString(totalStats.total_balance.toFixed(2)), 1),
+                                  _createElementVNode("div", _hoisted_23, _toDisplayString(totalStats.total_balance.toFixed(2)), 1),
                                   _cache[20] || (_cache[20] = _createElementVNode("div", { class: "text-body-2 text-medium-emphasis" }, "总余额", -1))
                                 ]),
                                 _: 1,
@@ -680,7 +647,7 @@ return (_ctx, _cache) => {
                                   }),
                                   _createVNode(_component_v_card_text, null, {
                                     default: _withCtx(() => [
-                                      _createElementVNode("div", _hoisted_26, [
+                                      _createElementVNode("div", _hoisted_24, [
                                         _cache[22] || (_cache[22] = _createElementVNode("span", null, "数量", -1)),
                                         _createVNode(_component_v_chip, {
                                           size: "small",
@@ -692,7 +659,7 @@ return (_ctx, _cache) => {
                                           _: 1
                                         })
                                       ]),
-                                      _createElementVNode("div", _hoisted_27, [
+                                      _createElementVNode("div", _hoisted_25, [
                                         _cache[23] || (_cache[23] = _createElementVNode("span", null, "有效", -1)),
                                         _createVNode(_component_v_chip, {
                                           size: "small",
@@ -704,7 +671,7 @@ return (_ctx, _cache) => {
                                           _: 1
                                         })
                                       ]),
-                                      _createElementVNode("div", _hoisted_28, [
+                                      _createElementVNode("div", _hoisted_26, [
                                         _cache[24] || (_cache[24] = _createElementVNode("span", null, "余额", -1)),
                                         _createVNode(_component_v_chip, {
                                           size: "small",
@@ -741,7 +708,7 @@ return (_ctx, _cache) => {
                                   }),
                                   _createVNode(_component_v_card_text, null, {
                                     default: _withCtx(() => [
-                                      _createElementVNode("div", _hoisted_29, [
+                                      _createElementVNode("div", _hoisted_27, [
                                         _cache[26] || (_cache[26] = _createElementVNode("span", null, "数量", -1)),
                                         _createVNode(_component_v_chip, {
                                           size: "small",
@@ -753,7 +720,7 @@ return (_ctx, _cache) => {
                                           _: 1
                                         })
                                       ]),
-                                      _createElementVNode("div", _hoisted_30, [
+                                      _createElementVNode("div", _hoisted_28, [
                                         _cache[27] || (_cache[27] = _createElementVNode("span", null, "有效", -1)),
                                         _createVNode(_component_v_chip, {
                                           size: "small",
@@ -765,7 +732,7 @@ return (_ctx, _cache) => {
                                           _: 1
                                         })
                                       ]),
-                                      _createElementVNode("div", _hoisted_31, [
+                                      _createElementVNode("div", _hoisted_29, [
                                         _cache[28] || (_cache[28] = _createElementVNode("span", null, "余额", -1)),
                                         _createVNode(_component_v_chip, {
                                           size: "small",
@@ -801,6 +768,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const Dashboard = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-817cc9fd"]]);
+const Dashboard = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-9479d69c"]]);
 
 export { Dashboard as default };

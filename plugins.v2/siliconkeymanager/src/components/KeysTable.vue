@@ -41,9 +41,29 @@
         :items="keys"
         :items-per-page="10"
         show-select
-        item-value="masked_key"
+        item-value="key"
         class="elevation-1"
       >
+        <!-- API Key列 -->
+        <template v-slot:item.key="{ item, index }">
+          <div class="d-flex align-center">
+            <code class="text-caption mr-2 key-text">{{ maskKey(item.key) }}</code>
+            <v-btn
+              icon="mdi-content-copy"
+              size="x-small"
+              variant="text"
+              color="primary"
+              @click="copyKey(index)"
+              :loading="copyingKey === item.key"
+            >
+              <v-icon size="16">mdi-content-copy</v-icon>
+              <v-tooltip activator="parent" location="top">
+                复制API Key
+              </v-tooltip>
+            </v-btn>
+          </div>
+        </template>
+
         <!-- 状态列 -->
         <template v-slot:item.status="{ item }">
           <v-chip
@@ -138,16 +158,26 @@ const deleting = ref(false)
 const checkingIndex = ref(-1)
 const deletingIndex = ref(-1)
 const deleteDialog = ref(false)
+const copyingKey = ref('')
 
 // 表格头部
 const headers = [
-  { title: 'API Key', key: 'masked_key', sortable: false },
+  { title: 'API Key', key: 'key', sortable: false, width: '200px' },
   { title: '状态', key: 'status', sortable: true },
   { title: '余额', key: 'balance', sortable: true },
   { title: '最后检查', key: 'last_check', sortable: true },
   { title: '添加时间', key: 'added_time', sortable: true },
-  { title: '操作', key: 'actions', sortable: false, width: '120px' }
+  { title: '操作', key: 'actions', sortable: false, width: '150px' }
 ]
+
+// 工具函数：隐藏完整key，只显示前后几位
+function maskKey(key) {
+  if (!key) return ''
+  if (key.length <= 16) {
+    return key.slice(0, 4) + "*".repeat(key.length - 8) + key.slice(-4)
+  }
+  return key.slice(0, 8) + "*".repeat(key.length - 16) + key.slice(-8)
+}
 
 // 方法
 function getStatusColor(status) {
@@ -196,8 +226,8 @@ async function checkSelected() {
   checking.value = true
   try {
     // 获取选中keys的索引
-    const indices = selectedKeys.value.map(maskedKey => 
-      props.keys.findIndex(key => key.masked_key === maskedKey)
+    const indices = selectedKeys.value.map(keyValue =>
+      props.keys.findIndex(key => key.key === keyValue)
     ).filter(index => index !== -1)
 
     emit('check', indices, props.keyType)
@@ -216,8 +246,8 @@ async function confirmDelete() {
   deleting.value = true
   try {
     // 获取选中keys的索引
-    const indices = selectedKeys.value.map(maskedKey => 
-      props.keys.findIndex(key => key.masked_key === maskedKey)
+    const indices = selectedKeys.value.map(keyValue =>
+      props.keys.findIndex(key => key.key === keyValue)
     ).filter(index => index !== -1)
 
     emit('delete', indices, props.keyType)
@@ -245,4 +275,176 @@ async function deleteSingle(index) {
     deletingIndex.value = -1
   }
 }
+
+async function copyToClipboard(text) {
+  // 多种复制方法，确保在各种环境下都能工作
+  const methods = [
+    // 方法1: 现代 Clipboard API
+    async () => {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text)
+        return true
+      }
+      return false
+    },
+
+    // 方法2: 传统方法 - 使用 execCommand
+    async () => {
+      const textArea = document.createElement('textarea')
+      textArea.value = text
+      textArea.style.position = 'fixed'
+      textArea.style.left = '-9999px'
+      textArea.style.top = '-9999px'
+      textArea.style.opacity = '0'
+      textArea.style.pointerEvents = 'none'
+      textArea.setAttribute('readonly', '')
+      textArea.setAttribute('contenteditable', 'true')
+
+      document.body.appendChild(textArea)
+
+      try {
+        textArea.focus()
+        textArea.select()
+        textArea.setSelectionRange(0, text.length)
+
+        const success = document.execCommand('copy')
+        document.body.removeChild(textArea)
+        return success
+      } catch (e) {
+        document.body.removeChild(textArea)
+        return false
+      }
+    },
+
+    // 方法3: 使用 Range 和 Selection
+    async () => {
+      const span = document.createElement('span')
+      span.textContent = text
+      span.style.position = 'fixed'
+      span.style.left = '-9999px'
+      span.style.top = '-9999px'
+      span.style.opacity = '0'
+
+      document.body.appendChild(span)
+
+      try {
+        const range = document.createRange()
+        range.selectNode(span)
+        const selection = window.getSelection()
+        selection.removeAllRanges()
+        selection.addRange(range)
+
+        const success = document.execCommand('copy')
+        selection.removeAllRanges()
+        document.body.removeChild(span)
+        return success
+      } catch (e) {
+        document.body.removeChild(span)
+        return false
+      }
+    }
+  ]
+
+  // 依次尝试各种方法
+  for (const method of methods) {
+    try {
+      const success = await method()
+      if (success) {
+        return true
+      }
+    } catch (e) {
+      console.warn('复制方法失败:', e)
+    }
+  }
+
+  return false
+}
+
+async function copyKey(index) {
+  const item = props.keys[index]
+  if (!item) return
+
+  copyingKey.value = item.key
+  try {
+    // 直接使用前端已有的完整key
+    const keyText = item.key
+
+    // 使用增强的复制功能
+    const success = await copyToClipboard(keyText)
+
+    if (success) {
+      console.log('API Key已复制到剪贴板')
+      // 添加成功提示
+      const successToast = document.createElement('div')
+      successToast.innerHTML = `
+        <div style="position: fixed; top: 20px; right: 20px; background: #4CAF50; color: white; padding: 12px 20px; border-radius: 4px; z-index: 10000; box-shadow: 0 2px 8px rgba(0,0,0,0.2);">
+          ✓ API Key已复制到剪贴板
+        </div>
+      `
+      document.body.appendChild(successToast)
+      setTimeout(() => successToast.remove(), 3000)
+    } else {
+      console.error('复制失败')
+      // 创建手动复制对话框
+      const copyDialog = document.createElement('div')
+      copyDialog.innerHTML = `
+        <div style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 9999; display: flex; align-items: center; justify-content: center;">
+          <div style="background: white; padding: 20px; border-radius: 8px; max-width: 80%; max-height: 80%; overflow: auto;">
+            <h3>复制失败，请手动复制以下内容：</h3>
+            <textarea readonly style="width: 100%; height: 100px; margin: 10px 0; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-family: monospace;">${keyText}</textarea>
+            <button onclick="this.parentElement.parentElement.remove()" style="padding: 8px 16px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer;">关闭</button>
+          </div>
+        </div>
+      `
+      document.body.appendChild(copyDialog)
+    }
+  } catch (error) {
+    console.error('复制失败:', error)
+    // 显示错误提示
+    const errorToast = document.createElement('div')
+    errorToast.innerHTML = `
+      <div style="position: fixed; top: 20px; right: 20px; background: #f44336; color: white; padding: 12px 20px; border-radius: 4px; z-index: 10000; box-shadow: 0 2px 8px rgba(0,0,0,0.2);">
+        ✗ 复制失败，请稍后重试
+      </div>
+    `
+    document.body.appendChild(errorToast)
+    setTimeout(() => errorToast.remove(), 3000)
+  } finally {
+    setTimeout(() => {
+      copyingKey.value = ''
+    }, 500)
+  }
+}
 </script>
+
+<style scoped>
+.key-text {
+  background: rgba(0, 0, 0, 0.05);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v-data-table {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.v-btn {
+  transition: all 0.2s ease;
+}
+
+.v-btn:hover {
+  transform: scale(1.1);
+}
+
+.v-chip {
+  font-weight: 500;
+  letter-spacing: 0.5px;
+}
+</style>

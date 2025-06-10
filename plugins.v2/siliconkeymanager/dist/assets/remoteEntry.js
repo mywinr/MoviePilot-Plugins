@@ -1,73 +1,15 @@
-const scriptRel = 'modulepreload';const assetsURL = function(dep) { return "/"+dep };const seen$1 = {};const __vitePreload = function preload(baseModule, deps, importerUrl) {
-    // @ts-expect-error true will be replaced with boolean later
-    if (!true || !deps || deps.length === 0) {
-        return baseModule();
-    }
-    const links = document.getElementsByTagName('link');
-    return Promise.all(deps.map((dep) => {
-        // @ts-expect-error assetsURL is declared before preload.toString()
-        dep = assetsURL(dep);
-        if (dep in seen$1)
-            return;
-        seen$1[dep] = true;
-        const isCss = dep.endsWith('.css');
-        const cssSelector = isCss ? '[rel="stylesheet"]' : '';
-        const isBaseRelative = !!importerUrl;
-        // check if the file is already preloaded by SSR markup
-        if (isBaseRelative) {
-            // When isBaseRelative is true then we have `importerUrl` and `dep` is
-            // already converted to an absolute URL by the `assetsURL` function
-            for (let i = links.length - 1; i >= 0; i--) {
-                const link = links[i];
-                // The `links[i].href` is an absolute URL thanks to browser doing the work
-                // for us. See https://html.spec.whatwg.org/multipage/common-dom-interfaces.html#reflecting-content-attributes-in-idl-attributes:idl-domstring-5
-                if (link.href === dep && (!isCss || link.rel === 'stylesheet')) {
-                    return;
-                }
-            }
-        }
-        else if (document.querySelector(`link[href="${dep}"]${cssSelector}`)) {
-            return;
-        }
-        const link = document.createElement('link');
-        link.rel = isCss ? 'stylesheet' : scriptRel;
-        if (!isCss) {
-            link.as = 'script';
-            link.crossOrigin = '';
-        }
-        link.href = dep;
-        document.head.appendChild(link);
-        if (isCss) {
-            return new Promise((res, rej) => {
-                link.addEventListener('load', res);
-                link.addEventListener('error', () => rej(new Error(`Unable to preload CSS for ${dep}`)));
-            });
-        }
-    }))
-        .then(() => baseModule())
-        .catch((err) => {
-        const e = new Event('vite:preloadError', { cancelable: true });
-        // @ts-expect-error custom payload
-        e.payload = err;
-        window.dispatchEvent(e);
-        if (!e.defaultPrevented) {
-            throw err;
-        }
-    });
-};
-
 const currentImports = {};
       const exportSet = new Set(['Module', '__esModule', 'default', '_export_sfc']);
       let moduleMap = {
 "./Page":()=>{
-      dynamicLoadingCss(["Page-6f6bd33d.css"], false, './Page');
-      return __federation_import('./__federation_expose_Page-bc91f1ea.js').then(module =>Object.keys(module).every(item => exportSet.has(item)) ? () => module.default : () => module)},
+      dynamicLoadingCss(["__federation_expose_Page-DIhhaNNP.css"], false, './Page');
+      return __federation_import('./__federation_expose_Page-2Ecz79Ih.js').then(module =>Object.keys(module).every(item => exportSet.has(item)) ? () => module.default : () => module)},
 "./Config":()=>{
       dynamicLoadingCss([], false, './Config');
-      return __federation_import('./__federation_expose_Config-ad7f1ba0.js').then(module =>Object.keys(module).every(item => exportSet.has(item)) ? () => module.default : () => module)},
+      return __federation_import('./__federation_expose_Config-CrDrC2sY.js').then(module =>Object.keys(module).every(item => exportSet.has(item)) ? () => module.default : () => module)},
 "./Dashboard":()=>{
-      dynamicLoadingCss(["Dashboard-5b960001.css"], false, './Dashboard');
-      return __federation_import('./__federation_expose_Dashboard-55341fff.js').then(module =>Object.keys(module).every(item => exportSet.has(item)) ? () => module.default : () => module)},};
+      dynamicLoadingCss(["__federation_expose_Dashboard-BnvAy6_y.css"], false, './Dashboard');
+      return __federation_import('./__federation_expose_Dashboard-D1cF1HNb.js').then(module =>Object.keys(module).every(item => exportSet.has(item)) ? () => module.default : () => module)},};
       const seen = {};
       const dynamicLoadingCss = (cssFilePaths, dontAppendStylesToHead, exposeItemName) => {
         const metaUrl = import.meta.url;
@@ -124,7 +66,7 @@ const currentImports = {};
         });
       };
       async function __federation_import(name) {
-        currentImports[name] ??= __vitePreload(() => import(name),true?[]:void 0);
+        currentImports[name] ??= import(name);
         return currentImports[name]
       }      const get =(module) => {
         if(!moduleMap[module]) throw new Error('Can not find remote module ' + module)

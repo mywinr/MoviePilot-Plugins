@@ -58,31 +58,31 @@
             <!-- 统计卡片 -->
             <v-row dense>
               <v-col cols="6" sm="3">
-                <v-card variant="tonal" color="primary" class="text-center pa-3">
-                  <v-icon size="24" class="mb-2">mdi-key-variant</v-icon>
-                  <div class="text-h6 font-weight-bold">{{ totalStats.total_count }}</div>
-                  <div class="text-caption">总Keys</div>
+                <v-card variant="outlined" class="text-center pa-3 stat-card">
+                  <v-icon size="24" class="mb-2" color="primary">mdi-key-variant</v-icon>
+                  <div class="text-h6 font-weight-bold text-primary">{{ totalStats.total_count }}</div>
+                  <div class="text-caption text-medium-emphasis">总Keys</div>
                 </v-card>
               </v-col>
               <v-col cols="6" sm="3">
-                <v-card variant="tonal" color="success" class="text-center pa-3">
-                  <v-icon size="24" class="mb-2">mdi-check-circle</v-icon>
-                  <div class="text-h6 font-weight-bold">{{ totalStats.valid_count }}</div>
-                  <div class="text-caption">有效</div>
+                <v-card variant="outlined" class="text-center pa-3 stat-card">
+                  <v-icon size="24" class="mb-2" color="success">mdi-check-circle</v-icon>
+                  <div class="text-h6 font-weight-bold text-success">{{ totalStats.valid_count }}</div>
+                  <div class="text-caption text-medium-emphasis">有效</div>
                 </v-card>
               </v-col>
               <v-col cols="6" sm="3">
-                <v-card variant="tonal" color="warning" class="text-center pa-3">
-                  <v-icon size="24" class="mb-2">mdi-alert-circle</v-icon>
-                  <div class="text-h6 font-weight-bold">{{ totalStats.failed_count }}</div>
-                  <div class="text-caption">失败</div>
+                <v-card variant="outlined" class="text-center pa-3 stat-card">
+                  <v-icon size="24" class="mb-2" color="warning">mdi-alert-circle</v-icon>
+                  <div class="text-h6 font-weight-bold text-warning">{{ totalStats.failed_count }}</div>
+                  <div class="text-caption text-medium-emphasis">失败</div>
                 </v-card>
               </v-col>
               <v-col cols="6" sm="3">
-                <v-card variant="tonal" color="info" class="text-center pa-3">
-                  <v-icon size="24" class="mb-2">mdi-currency-usd</v-icon>
-                  <div class="text-h6 font-weight-bold">{{ totalStats.total_balance.toFixed(2) }}</div>
-                  <div class="text-caption">总余额</div>
+                <v-card variant="outlined" class="text-center pa-3 stat-card">
+                  <v-icon size="24" class="mb-2" color="info">mdi-currency-usd</v-icon>
+                  <div class="text-h6 font-weight-bold text-info">{{ totalStats.total_balance.toFixed(2) }}</div>
+                  <div class="text-caption text-medium-emphasis">总余额</div>
                 </v-card>
               </v-col>
             </v-row>
@@ -133,50 +133,33 @@
 
         <!-- 主要内容 -->
         <div v-else class="dashboard-main">
-          <!-- 状态概览 -->
-          <div class="status-overview mb-4">
-            <v-alert
-              type="success"
-              variant="tonal"
-              density="compact"
-              icon="mdi-key"
-            >
-              <div class="d-flex align-center justify-space-between">
-                <span>管理 {{ totalStats.total_count }} 个Keys，总余额 {{ totalStats.total_balance.toFixed(2) }}</span>
-                <v-chip size="small" variant="text">
-                  {{ lastUpdateTime }}
-                </v-chip>
-              </div>
-            </v-alert>
-          </div>
-
           <!-- 统计卡片 -->
           <v-row dense class="mb-4">
             <v-col cols="6" md="3">
-              <v-card variant="tonal" color="primary" class="text-center pa-4">
+              <v-card variant="outlined" class="text-center pa-4 stat-card">
                 <v-icon size="32" class="mb-2" color="primary">mdi-key-variant</v-icon>
-                <div class="text-h5 font-weight-bold">{{ totalStats.total_count }}</div>
+                <div class="text-h5 font-weight-bold text-primary">{{ totalStats.total_count }}</div>
                 <div class="text-body-2 text-medium-emphasis">总Keys数量</div>
               </v-card>
             </v-col>
             <v-col cols="6" md="3">
-              <v-card variant="tonal" color="success" class="text-center pa-4">
+              <v-card variant="outlined" class="text-center pa-4 stat-card">
                 <v-icon size="32" class="mb-2" color="success">mdi-check-circle</v-icon>
-                <div class="text-h5 font-weight-bold">{{ totalStats.valid_count }}</div>
+                <div class="text-h5 font-weight-bold text-success">{{ totalStats.valid_count }}</div>
                 <div class="text-body-2 text-medium-emphasis">有效Keys</div>
               </v-card>
             </v-col>
             <v-col cols="6" md="3">
-              <v-card variant="tonal" color="warning" class="text-center pa-4">
+              <v-card variant="outlined" class="text-center pa-4 stat-card">
                 <v-icon size="32" class="mb-2" color="warning">mdi-alert-circle</v-icon>
-                <div class="text-h5 font-weight-bold">{{ totalStats.failed_count }}</div>
+                <div class="text-h5 font-weight-bold text-warning">{{ totalStats.failed_count }}</div>
                 <div class="text-body-2 text-medium-emphasis">检查失败</div>
               </v-card>
             </v-col>
             <v-col cols="6" md="3">
-              <v-card variant="tonal" color="info" class="text-center pa-4">
+              <v-card variant="outlined" class="text-center pa-4 stat-card">
                 <v-icon size="32" class="mb-2" color="info">mdi-currency-usd</v-icon>
-                <div class="text-h5 font-weight-bold">{{ totalStats.total_balance.toFixed(2) }}</div>
+                <div class="text-h5 font-weight-bold text-info">{{ totalStats.total_balance.toFixed(2) }}</div>
                 <div class="text-body-2 text-medium-emphasis">总余额</div>
               </v-card>
             </v-col>
@@ -385,11 +368,13 @@ onUnmounted(() => {
   padding-bottom: 16px;
 }
 
-.metric-card {
+.stat-card {
   transition: transform 0.2s ease-in-out;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
 }
 
-.metric-card:hover {
+.stat-card:hover {
   transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
 </style>

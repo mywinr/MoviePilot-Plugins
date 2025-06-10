@@ -1,4 +1,4 @@
-import { importShared } from './__federation_fn_import-054b33c3.js';
+import { importShared } from './__federation_fn_import-JrT3xvdd.js';
 
 const {createTextVNode:_createTextVNode,resolveComponent:_resolveComponent,withCtx:_withCtx,createVNode:_createVNode,toDisplayString:_toDisplayString,openBlock:_openBlock,createBlock:_createBlock} = await importShared('vue');
 

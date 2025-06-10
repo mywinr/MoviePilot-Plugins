@@ -308,7 +308,6 @@ function satisfy(version, range) {
     versionPreRelease
   ] = extractedVersion;
   const versionAtom = {
-    operator: versionOperator,
     version: combineVersion(
       versionMajor,
       versionMinor,
