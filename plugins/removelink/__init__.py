@@ -1,4 +1,5 @@
 import os
+import platform
 import threading
 import time
 import traceback
@@ -6,9 +7,11 @@ from pathlib import Path
 from typing import List, Tuple, Dict, Any
 from dataclasses import dataclass
 from datetime import datetime
+from typing import NamedTuple
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
+from watchdog.observers.polling import PollingObserver
 from app.db.transferhistory_oper import TransferHistoryOper
 from app.log import logger
 from app.plugins import _PluginBase
@@ -18,6 +21,12 @@ from app.schemas.types import EventType
 
 state_lock = threading.Lock()
 deletion_queue_lock = threading.Lock()
+
+
+class FileInfo(NamedTuple):
+    """文件信息"""
+    inode: int
+    add_time: datetime
 
 
 @dataclass
@@ -39,40 +48,62 @@ class FileMonitorHandler(FileSystemEventHandler):
         self._watch_path = monpath
         self.sync = sync
 
+    def _is_excluded_file(self, file_path: Path) -> bool:
+        """检查文件是否应该被排除"""
+        # 排除临时文件
+        if file_path.suffix in [".!qB", ".part", ".mp", ".tmp", ".temp"]:
+            return True
+        # 检查关键字过滤
+        if self.sync.exclude_keywords:
+            for keyword in self.sync.exclude_keywords.split("\n"):
+                if keyword and keyword in str(file_path):
+                    logger.debug(f"{file_path} 命中过滤关键字 {keyword}，不处理")
+                    return True
+        return False
+
+    def _add_file_to_state(self, file_path: Path):
+        """添加文件到状态管理"""
+        if self._is_excluded_file(file_path):
+            return
+
+        with state_lock:
+            try:
+                if not file_path.exists():
+                    return
+                stat_info = file_path.stat()
+                file_info = FileInfo(
+                    inode=stat_info.st_ino,
+                    add_time=datetime.now()
+                )
+                self.sync.file_state[str(file_path)] = file_info
+                logger.debug(f"添加文件到监控：{file_path}")
+            except (OSError, PermissionError) as e:
+                logger.debug(f"无法访问文件 {file_path}：{e}")
+            except Exception as e:
+                logger.error(f"新增文件记录失败：{str(e)}")
+
     def on_created(self, event):
         if event.is_directory:
             return
         file_path = Path(event.src_path)
-        if file_path.suffix in [".!qB", ".part", ".mp"]:
-            return
         logger.info(f"监测到新增文件：{file_path}")
-        if self.sync.exclude_keywords:
-            for keyword in self.sync.exclude_keywords.split("\n"):
-                if keyword and keyword in str(file_path):
-                    logger.info(f"{file_path} 命中过滤关键字 {keyword}，不处理")
-                    return
-        # 新增文件记录
-        with state_lock:
-            try:
-                self.sync.state_set[str(file_path)] = file_path.stat().st_ino
-            except Exception as e:
-                logger.error(f"新增文件记录失败：{str(e)}")
+        self._add_file_to_state(file_path)
 
     def on_moved(self, event):
         if event.is_directory:
             return
-        file_path = Path(event.dest_path)
-        if file_path.suffix in [".!qB", ".part", ".mp"]:
-            return
-        logger.info(f"监测到新增文件：{file_path}")
-        if self.sync.exclude_keywords:
-            for keyword in self.sync.exclude_keywords.split("\n"):
-                if keyword and keyword in str(file_path):
-                    logger.info(f"{file_path} 命中过滤关键字 {keyword}，不处理")
-                    return
-        # 新增文件记录
+        # 处理移动事件：移除源文件，添加目标文件
+        src_path = Path(event.src_path)
+        dest_path = Path(event.dest_path)
+
+        logger.info(f"监测到文件移动：{src_path} -> {dest_path}")
+
+        # 从状态中移除源文件
         with state_lock:
-            self.sync.state_set[str(file_path)] = file_path.stat().st_ino
+            self.sync.file_state.pop(str(src_path), None)
+
+        # 添加目标文件
+        self._add_file_to_state(dest_path)
 
     def on_deleted(self, event):
         file_path = Path(event.src_path)
@@ -104,22 +135,46 @@ def updateState(monitor_dirs: List[str]):
     """
     # 记录开始时间
     start_time = time.time()
-    state_set = {}
+    file_state = {}
+    init_time = datetime.now()
+    error_count = 0
+
     for mon_path in monitor_dirs:
-        for root, _, files in os.walk(mon_path):
-            for file in files:
-                file = Path(root) / file
-                if not file.exists():
-                    continue
-                # 记录文件inode
-                state_set[str(file)] = file.stat().st_ino
+        if not os.path.exists(mon_path):
+            logger.warning(f"监控目录不存在：{mon_path}")
+            continue
+
+        try:
+            for root, _, files in os.walk(mon_path):
+                for file_name in files:
+                    file_path = Path(root) / file_name
+                    try:
+                        if not file_path.exists():
+                            continue
+                        # 获取文件统计信息
+                        stat_info = file_path.stat()
+                        # 记录文件信息
+                        file_info = FileInfo(
+                            inode=stat_info.st_ino,
+                            add_time=init_time
+                        )
+                        file_state[str(file_path)] = file_info
+                    except (OSError, PermissionError) as e:
+                        error_count += 1
+                        logger.debug(f"无法访问文件 {file_path}：{e}")
+        except Exception as e:
+            logger.error(f"扫描目录 {mon_path} 时发生错误：{e}")
+
     # 记录结束时间
     end_time = time.time()
     # 计算耗时
     elapsed_time = end_time - start_time
-    logger.info(f"更新文件列表完成，共计{len(state_set)}个文件，耗时：{elapsed_time}秒")
 
-    return state_set
+    logger.info(f"更新文件列表完成，共计 {len(file_state)} 个文件，耗时 {elapsed_time:.2f} 秒")
+    if error_count > 0:
+        logger.warning(f"扫描过程中有 {error_count} 个文件无法访问")
+
+    return file_state
 
 
 class RemoveLink(_PluginBase):
@@ -130,7 +185,7 @@ class RemoveLink(_PluginBase):
     # 插件图标
     plugin_icon = "Ombi_A.png"
     # 插件版本
-    plugin_version = "2.3"
+    plugin_version = "2.4"
     # 插件作者
     plugin_author = "DzAvril"
     # 作者主页
@@ -155,16 +210,38 @@ class RemoveLink(_PluginBase):
     _delay_seconds = 30
     _transferhistory = None
     _observer = []
-    # 监控目录的文件列表
-    state_set: Dict[str, int] = {}
+    # 监控目录的文件列表 {文件路径: FileInfo(inode, add_time)}
+    file_state: Dict[str, FileInfo] = {}
     # 延迟删除队列
     deletion_queue: List[DeletionTask] = []
     # 延迟删除定时器
     _deletion_timer = None
 
+    @staticmethod
+    def __choose_observer():
+        """
+        选择最优的监控模式
+        """
+        system = platform.system()
+
+        try:
+            if system == 'Linux':
+                from watchdog.observers.inotify import InotifyObserver
+                return InotifyObserver()
+            elif system == 'Darwin':
+                from watchdog.observers.fsevents import FSEventsObserver
+                return FSEventsObserver()
+            elif system == 'Windows':
+                from watchdog.observers.read_directory_changes import WindowsApiObserver
+                return WindowsApiObserver()
+        except Exception as error:
+            logger.warn(f"导入模块错误：{error}，将使用 PollingObserver 监控目录")
+        return PollingObserver()
+
     def init_plugin(self, config: dict = None):
         logger.info(f"初始化硬链接清理插件")
         self._transferhistory = TransferHistoryOper()
+
         if config:
             self._enabled = config.get("enabled")
             self._notify = config.get("notify")
@@ -201,7 +278,8 @@ class RemoveLink(_PluginBase):
                 if not mon_path:
                     continue
                 try:
-                    observer = Observer(timeout=10)
+                    # 使用优化的监控器选择
+                    observer = self.__choose_observer()
                     self._observer.append(observer)
                     observer.schedule(
                         FileMonitorHandler(mon_path, self), mon_path, recursive=True
@@ -211,28 +289,23 @@ class RemoveLink(_PluginBase):
                     logger.info(f"{mon_path} 的目录监控服务启动")
                 except Exception as e:
                     err_msg = str(e)
-                    logger.error(f"{mon_path} 启动目录监控失败：{err_msg}")
+                    # 特殊处理 inotify 限制错误
+                    if "inotify" in err_msg and "reached" in err_msg:
+                        logger.warn(
+                            f"目录监控服务启动出现异常：{err_msg}，请在宿主机上（不是docker容器内）执行以下命令并重启："
+                            + """
+                             echo fs.inotify.max_user_watches=524288 | sudo tee -a /etc/sysctl.conf
+                             echo fs.inotify.max_user_instances=524288 | sudo tee -a /etc/sysctl.conf
+                             sudo sysctl -p
+                             """)
+                    else:
+                        logger.error(f"{mon_path} 启动目录监控失败：{err_msg}")
                     self.systemmessage.put(f"{mon_path} 启动目录监控失败：{err_msg}", title="清理硬链接")
 
             # 更新监控集合 - 在所有线程停止后安全获取锁
             with state_lock:
-                self.state_set = updateState(monitor_dirs)
+                self.file_state = updateState(monitor_dirs)
                 logger.debug("监控集合更新完成")
-
-    def __update_config(self):
-        """
-        更新配置
-        """
-        self.update_config(
-            {
-                "enabled": self._enabled,
-                "notify": self._notify,
-                "monitor_dirs": self.monitor_dirs,
-                "exclude_keywords": self.exclude_keywords,
-                "delayed_deletion": self._delayed_deletion,
-                "delay_seconds": self._delay_seconds,
-            }
-        )
 
     def get_state(self) -> bool:
         return self._enabled
@@ -645,7 +718,7 @@ class RemoveLink(_PluginBase):
                         self.post_message(
                             mtype=NotificationType.SiteMessage,
                             title="📁 目录清理",
-                            text=f"🗑️ 清理空目录：{parent_path.name}",
+                            text=f"🗑️ 清理空目录：{parent_path}",
                         )
                 else:
                     break
@@ -667,8 +740,17 @@ class RemoveLink(_PluginBase):
                 logger.info(f"文件 {task.file_path} 已被重新创建，跳过删除操作")
                 return
 
+            # 检查是否有相同inode的新文件（重新硬链接的情况）
+            with state_lock:
+                for path, file_info in self.file_state.items():
+                    if file_info.inode == task.deleted_inode and path != str(task.file_path):
+                        # 检查文件是否在删除任务创建之后被添加到监控中
+                        if file_info.add_time > task.timestamp:
+                            logger.info(f"检测到相同inode的新文件 {path}，添加时间 {file_info.add_time} 晚于删除时间 {task.timestamp}，可能是重新硬链接，跳过删除操作")
+                            return
+
             # 延迟执行所有删除相关操作
-            logger.debug(f"文件 {task.file_path} 确认被删除，开始执行延迟删除操作")
+            logger.debug(f"文件 {task.file_path} 确认被删除且无重新硬链接，开始执行延迟删除操作")
 
             # 清理刮削文件
             self.delete_scrap_infos(task.file_path)
@@ -682,9 +764,10 @@ class RemoveLink(_PluginBase):
 
             # 查找并删除硬链接文件
             deleted_files = []
+
             with state_lock:
-                for path, inode in self.state_set.copy().items():
-                    if inode == task.deleted_inode:
+                for path, file_info in self.file_state.copy().items():
+                    if file_info.inode == task.deleted_inode:
                         file = Path(path)
                         if self.__is_excluded(file):
                             logger.debug(f"文件 {file} 在不删除目录中，跳过")
@@ -706,7 +789,7 @@ class RemoveLink(_PluginBase):
                         self.delete_history(str(file))
 
                         # 从状态集合中移除
-                        self.state_set.pop(path, None)
+                        self.file_state.pop(path, None)
 
             # 发送通知（在锁外执行）
             if self._notify and deleted_files:
@@ -745,33 +828,53 @@ class RemoveLink(_PluginBase):
         """
         try:
             current_time = datetime.now()
+            tasks_to_process = []
+
             # 先获取需要处理的任务，避免在处理任务时持有锁
             with deletion_queue_lock:
                 # 找到需要处理的任务
-                tasks_to_process = [
-                    task for task in self.deletion_queue
-                    if not task.processed and
-                    (current_time - task.timestamp).total_seconds() >= self._delay_seconds
-                ]
+                for task in self.deletion_queue:
+                    if not task.processed:
+                        elapsed = (current_time - task.timestamp).total_seconds()
+                        if elapsed >= self._delay_seconds:
+                            tasks_to_process.append(task)
 
                 if tasks_to_process:
                     logger.debug(f"处理延迟删除队列，待处理任务数: {len(tasks_to_process)}")
 
             # 在锁外处理任务，避免死锁
+            processed_count = 0
             for task in tasks_to_process:
-                self._execute_delayed_deletion(task)
+                try:
+                    self._execute_delayed_deletion(task)
+                    processed_count += 1
+                except Exception as e:
+                    logger.error(f"处理延迟删除任务失败：{task.file_path} - {e}")
 
             # 重新获取锁进行清理和定时器管理
             with deletion_queue_lock:
                 # 清理已处理的任务
+                original_count = len(self.deletion_queue)
                 self.deletion_queue = [
                     task for task in self.deletion_queue if not task.processed
                 ]
+                cleaned_count = original_count - len(self.deletion_queue)
+
+                if cleaned_count > 0:
+                    logger.debug(f"清理了 {cleaned_count} 个已处理的任务")
 
                 # 如果还有未处理的任务，重新启动定时器
                 if self.deletion_queue:
-                    logger.debug(f"还有 {len(self.deletion_queue)} 个任务待处理，重新启动定时器")
-                    self._start_deletion_timer()
+                    # 计算下一个任务的等待时间
+                    next_task_time = min(
+                        (task.timestamp.timestamp() + self._delay_seconds)
+                        for task in self.deletion_queue if not task.processed
+                    )
+                    wait_time = max(1, next_task_time - current_time.timestamp())
+
+                    logger.debug(f"还有 {len(self.deletion_queue)} 个任务待处理，"
+                               f"{wait_time:.1f} 秒后重新检查")
+                    self._start_deletion_timer(wait_time)
                 else:
                     self._deletion_timer = None
                     logger.debug("延迟删除队列已清空，定时器停止")
@@ -779,14 +882,18 @@ class RemoveLink(_PluginBase):
         except Exception as e:
             logger.error(f"处理延迟删除队列失败：{str(e)} - {traceback.format_exc()}")
             # 确保定时器状态正确
-            self._deletion_timer = None
+            with deletion_queue_lock:
+                self._deletion_timer = None
 
-    def _start_deletion_timer(self):
+    def _start_deletion_timer(self, delay_time: float = None):
         """
         启动延迟删除定时器
         注意：此方法假设调用前已检查没有运行中的定时器
         """
-        self._deletion_timer = threading.Timer(self._delay_seconds, self._process_deletion_queue)
+        if delay_time is None:
+            delay_time = self._delay_seconds
+
+        self._deletion_timer = threading.Timer(delay_time, self._process_deletion_queue)
         self._deletion_timer.daemon = True
         self._deletion_timer.start()
 
@@ -798,13 +905,14 @@ class RemoveLink(_PluginBase):
 
         # 删除的文件对应的监控信息
         with state_lock:
-            # 删除的文件inode
-            deleted_inode = self.state_set.get(str(file_path))
-            if not deleted_inode:
+            # 删除的文件信息
+            file_info = self.file_state.get(str(file_path))
+            if not file_info:
                 logger.debug(f"文件 {file_path} 未在监控列表中，跳过处理")
                 return
             else:
-                self.state_set.pop(str(file_path))
+                deleted_inode = file_info.inode
+                self.file_state.pop(str(file_path))
 
             # 根据配置选择立即删除或延迟删除
             if self._delayed_deletion:
@@ -840,9 +948,9 @@ class RemoveLink(_PluginBase):
                 self.delete_history(str(file_path))
 
                 try:
-                    # 在current_set中查找与deleted_inode有相同inode的文件并删除
-                    for path, inode in self.state_set.copy().items():
-                        if inode == deleted_inode:
+                    # 在file_state中查找与deleted_inode有相同inode的文件并删除
+                    for path, file_info in self.file_state.copy().items():
+                        if file_info.inode == deleted_inode:
                             file = Path(path)
                             if self.__is_excluded(file):
                                 logger.debug(f"文件 {file} 在不删除目录中，跳过")
