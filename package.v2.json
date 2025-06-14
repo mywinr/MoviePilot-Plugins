@@ -1,12 +1,13 @@
 {
     "QbCommand": {
-        "name": "QB远程操作",
-        "description": "通过定时任务或交互命令远程操作QB暂停/开始/限速等。",
-        "labels": "下载管理,Qbittorrent",
+        "name": "下载器远程操作",
+        "description": "通过定时任务或交互命令远程操作qBittorrent/Transmission暂停/开始/限速等",
+        "labels": "下载管理",
         "version": "2.2",
         "icon": "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/qb_tr.png",
         "author": "DzAvril",
         "level": 1,
+        "v2": true,
         "history": {
             "v2.2": "支持transmission",
             "v2.1": "支持qbittorrent 5",
