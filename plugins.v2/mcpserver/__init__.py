@@ -304,16 +304,33 @@ class ProcessManager:
                 logger.error("无法创建或验证虚拟环境")
                 return False
 
+            # 检查是否有手动配置的访问令牌
+            manual_token = self.plugin._config.get("mp_access_token", "").strip()
+            if manual_token:
+                logger.info("使用手动配置的访问令牌")
+                if self.plugin._validate_access_token(manual_token):
+                    self.plugin._config["access_token"] = manual_token
+                    logger.info("手动配置的访问令牌验证成功")
+                    return True
+                else:
+                    logger.warning("手动配置的访问令牌验证失败，将尝试用户名密码认证")
+
+            # 检查用户名密码配置
             username = self.plugin._config.get("mp_username", "")
             password = self.plugin._config.get("mp_password", "")
 
             if not username or not password:
-                logger.error("未配置 MoviePilot 用户名或密码")
+                logger.error("未配置 MoviePilot 用户名或密码，且手动令牌无效")
+                # 启动异步令牌获取重试机制
+                self.plugin._start_token_retry_mechanism()
                 return False
 
+            # 尝试获取访问令牌
             access_token = self.plugin._get_moviepilot_access_token()
             if not access_token:
                 logger.error("无法获取 MoviePilot 的 access token")
+                # 启动异步令牌获取重试机制
+                self.plugin._start_token_retry_mechanism()
                 return False
 
             self.plugin._config["access_token"] = access_token
@@ -322,6 +339,8 @@ class ProcessManager:
 
         except Exception as e:
             logger.error(f"检查前置条件失败: {str(e)}")
+            # 启动异步令牌获取重试机制
+            self.plugin._start_token_retry_mechanism()
             return False
 
     def _cleanup_existing_process(self):
@@ -636,7 +655,7 @@ class MCPServer(_PluginBase, metaclass=SingletonClass):
     plugin_name = "MCP Server"
     plugin_desc = "使用MCP客户端通过大模型来操作MoviePilot"
     plugin_icon = "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/mcp.png"
-    plugin_version = "2.2"
+    plugin_version = "2.3"
     plugin_author = "DzAvril"
     author_url = "https://github.com/DzAvril"
     plugin_config_prefix = "mcpserver_"
@@ -659,6 +678,8 @@ class MCPServer(_PluginBase, metaclass=SingletonClass):
         "require_auth": True,
         "mp_username": "admin",
         "mp_password": "",
+        "mp_access_token": "",  # 手动配置的访问令牌
+        "token_retry_interval": 60,  # 令牌重试间隔（秒），默认60秒
         "enable_plugin_tools": True,
         "plugin_tool_timeout": 30,
         "max_plugin_tools": 100,
@@ -681,6 +702,11 @@ class MCPServer(_PluginBase, metaclass=SingletonClass):
         self._plugin_dir = Path(__file__).parent.absolute()
         self._venv_path = self._plugin_dir / self._config["venv_dir"]
         self._python_bin = self._venv_path / "bin" / "python" if not SystemUtils.is_windows() else self._venv_path / "Scripts" / "python.exe"
+
+        # 令牌重试机制相关
+        self._token_retry_timer = None
+        self._token_retry_lock = threading.Lock()
+        self._token_acquisition_in_progress = False
 
         # 创建ProcessManager实例，它会自动清理冲突的进程
         self._process_manager = ProcessManager(self)
@@ -1157,6 +1183,61 @@ class MCPServer(_PluginBase, metaclass=SingletonClass):
             logger.error(f"生成新token失败: {str(e)}")
             return {"message": f"生成新token失败: {str(e)}", "status": "error"}
 
+    def _test_access_token(self, token: str) -> Dict[str, Any]:
+        """API Endpoint: 测试访问令牌是否有效"""
+        try:
+            if not token or not token.strip():
+                return {
+                    "message": "访问令牌不能为空",
+                    "status": "error",
+                    "valid": False
+                }
+
+            token = token.strip()
+            logger.info("正在测试访问令牌有效性...")
+
+            if self._validate_access_token(token):
+                return {
+                    "message": "访问令牌验证成功",
+                    "status": "success",
+                    "valid": True
+                }
+            else:
+                return {
+                    "message": "访问令牌验证失败，请检查令牌是否正确或已过期",
+                    "status": "error",
+                    "valid": False
+                }
+
+        except Exception as e:
+            logger.error(f"测试访问令牌失败: {str(e)}")
+            return {
+                "message": f"测试访问令牌失败: {str(e)}",
+                "status": "error",
+                "valid": False
+            }
+
+    def _test_access_token_api(self, body: dict = None) -> Dict[str, Any]:
+        """API Endpoint: 测试访问令牌（从请求体获取令牌）"""
+        try:
+            if not body or "token" not in body:
+                return {
+                    "message": "请求体中缺少token参数",
+                    "status": "error",
+                    "valid": False
+                }
+
+            token = body["token"]
+            return self._test_access_token(token)
+
+        except Exception as e:
+            logger.error(f"测试访问令牌API失败: {str(e)}")
+            return {
+                "message": f"测试访问令牌API失败: {str(e)}",
+                "status": "error",
+                "valid": False
+            }
+
     def get_state(self) -> bool:
         """获取插件状态"""
         return self._enable
@@ -1301,6 +1382,13 @@ class MCPServer(_PluginBase, metaclass=SingletonClass):
                 "methods": ["POST"],
                 "auth": "bear",
                 "summary": "生成新的API令牌",
+            },
+            {
+                "path": "/test-token",
+                "endpoint": self._test_access_token_api,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "测试访问令牌",
             },
             {
                 "path": "/status",
@@ -1831,8 +1919,50 @@ class MCPServer(_PluginBase, metaclass=SingletonClass):
     def _get_moviepilot_access_token(self) -> Optional[str]:
         """
         获取 MoviePilot 的 access token
-        通过用户名和密码登录获取 access_token，用于访问需要 Bearer 认证的 API
+        优先使用手动配置的令牌，如果无效或未配置，则通过用户名和密码登录获取
         """
+        try:
+            # 首先检查是否有手动配置的访问令牌
+            manual_token = self._config.get("mp_access_token", "").strip()
+            if manual_token:
+                logger.info("检测到手动配置的访问令牌，正在验证...")
+                if self._validate_access_token(manual_token):
+                    logger.info("手动配置的访问令牌验证成功")
+                    return manual_token
+                else:
+                    logger.warning("手动配置的访问令牌验证失败，将尝试用户名密码认证")
+
+            # 如果没有手动令牌或验证失败，使用用户名密码认证
+            return self._get_token_by_credentials()
+
+        except Exception as e:
+            logger.error(f"获取 MoviePilot access token 失败: {str(e)}")
+            logger.error(traceback.format_exc())
+            return None
+
+    def _validate_access_token(self, token: str) -> bool:
+        """验证访问令牌是否有效"""
+        try:
+            # 使用令牌调用一个简单的API来验证其有效性
+            base_url = f"http://localhost:{settings.PORT}"
+            test_url = f"{base_url}/api/v1/user/current"
+
+            headers = {"Authorization": f"Bearer {token}"}
+            response = requests.get(test_url, headers=headers, timeout=10)
+
+            if response.status_code == 200:
+                logger.debug("访问令牌验证成功")
+                return True
+            else:
+                logger.debug(f"访问令牌验证失败，状态码: {response.status_code}")
+                return False
+
+        except Exception as e:
+            logger.debug(f"验证访问令牌时出错: {str(e)}")
+            return False
+
+    def _get_token_by_credentials(self) -> Optional[str]:
+        """通过用户名和密码获取访问令牌"""
         try:
             # 获取用户名和密码
             username = self._config.get("mp_username", "admin")
@@ -1878,9 +2008,84 @@ class MCPServer(_PluginBase, metaclass=SingletonClass):
             return access_token
 
         except Exception as e:
-            logger.error(f"获取 MoviePilot access token 失败: {str(e)}")
+            logger.error(f"通过用户名密码获取 access token 失败: {str(e)}")
             logger.error(traceback.format_exc())
             return None
+
+    def _start_token_retry_mechanism(self):
+        """启动异步令牌获取重试机制"""
+        with self._token_retry_lock:
+            if self._token_acquisition_in_progress:
+                logger.debug("令牌获取重试机制已在运行中")
+                return
+
+            self._token_acquisition_in_progress = True
+
+            # 停止现有的重试定时器
+            if self._token_retry_timer:
+                self._token_retry_timer.cancel()
+
+            retry_interval = self._config.get("token_retry_interval", 60)
+            logger.info(f"启动令牌获取重试机制，间隔: {retry_interval}秒")
+
+            # 启动重试定时器
+            self._token_retry_timer = threading.Timer(retry_interval, self._retry_token_acquisition)
+            self._token_retry_timer.daemon = True
+            self._token_retry_timer.start()
+
+    def _retry_token_acquisition(self):
+        """重试获取访问令牌"""
+        try:
+            logger.info("正在重试获取 MoviePilot 访问令牌...")
+
+            # 尝试获取访问令牌
+            access_token = self._get_moviepilot_access_token()
+
+            if access_token:
+                logger.info("重试获取访问令牌成功，正在启动 MCP 服务器...")
+                self._config["access_token"] = access_token
+
+                # 停止重试机制
+                with self._token_retry_lock:
+                    self._token_acquisition_in_progress = False
+                    if self._token_retry_timer:
+                        self._token_retry_timer.cancel()
+                        self._token_retry_timer = None
+
+                # 启动 MCP 服务器
+                if self._enable and self._process_manager:
+                    self._process_manager.start_server()
+
+            else:
+                logger.warning("重试获取访问令牌失败，将继续重试...")
+                # 继续重试
+                with self._token_retry_lock:
+                    if self._token_acquisition_in_progress:
+                        retry_interval = self._config.get("token_retry_interval", 60)
+                        self._token_retry_timer = threading.Timer(retry_interval, self._retry_token_acquisition)
+                        self._token_retry_timer.daemon = True
+                        self._token_retry_timer.start()
+
+        except Exception as e:
+            logger.error(f"重试获取访问令牌时出错: {str(e)}")
+            logger.error(traceback.format_exc())
+
+            # 继续重试
+            with self._token_retry_lock:
+                if self._token_acquisition_in_progress:
+                    retry_interval = self._config.get("token_retry_interval", 60)
+                    self._token_retry_timer = threading.Timer(retry_interval, self._retry_token_acquisition)
+                    self._token_retry_timer.daemon = True
+                    self._token_retry_timer.start()
+
+    def _stop_token_retry_mechanism(self):
+        """停止令牌重试机制"""
+        with self._token_retry_lock:
+            if self._token_retry_timer:
+                self._token_retry_timer.cancel()
+                self._token_retry_timer = None
+            self._token_acquisition_in_progress = False
+            logger.info("令牌获取重试机制已停止")
 
     # --- V2 Vue Interface Method ---
     @staticmethod
@@ -1899,6 +2104,9 @@ class MCPServer(_PluginBase, metaclass=SingletonClass):
         logger.info("正在停止MCPServer服务...")
 
         try:
+            # 停止令牌重试机制
+            self._stop_token_retry_mechanism()
+
             if self._process_manager:
                 self._process_manager.stop_server()
             logger.info("MCPServer服务已停止...")

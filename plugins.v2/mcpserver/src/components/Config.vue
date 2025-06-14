@@ -117,15 +117,71 @@
 
           <!-- MoviePilot 认证配置区域 -->
           <div class="text-subtitle-1 font-weight-bold mt-4 mb-2">MoviePilot 认证配置</div>
+
+          <!-- 手动访问令牌配置 -->
+          <v-row>
+            <v-col cols="12">
+              <v-text-field
+                v-model="config.mp_access_token"
+                label="手动访问令牌（可选）"
+                variant="outlined"
+                hint="如果提供，将优先使用此令牌，无需用户名密码认证"
+                persistent-hint
+                :append-inner-icon="showAccessToken ? 'mdi-eye-off' : 'mdi-eye'"
+                :type="showAccessToken ? 'text' : 'password'"
+                @click:append-inner="showAccessToken = !showAccessToken"
+              >
+                <template v-slot:append>
+                  <div class="d-flex">
+                    <v-tooltip text="复制访问令牌">
+                      <template v-slot:activator="{ props }">
+                        <v-btn
+                          v-bind="props"
+                          icon
+                          variant="text"
+                          color="info"
+                          size="small"
+                          :loading="copyingAccessToken"
+                          @click="copyAccessToken"
+                          class="mr-1"
+                          :disabled="!config.mp_access_token"
+                        >
+                          <v-icon>mdi-content-copy</v-icon>
+                        </v-btn>
+                      </template>
+                    </v-tooltip>
+                    <v-tooltip text="测试访问令牌">
+                      <template v-slot:activator="{ props }">
+                        <v-btn
+                          v-bind="props"
+                          icon
+                          variant="text"
+                          color="success"
+                          size="small"
+                          :loading="testingAccessToken"
+                          @click="testAccessToken"
+                          :disabled="!config.mp_access_token"
+                        >
+                          <v-icon>mdi-check-circle</v-icon>
+                        </v-btn>
+                      </template>
+                    </v-tooltip>
+                  </div>
+                </template>
+              </v-text-field>
+            </v-col>
+          </v-row>
+
+          <!-- 用户名密码认证（备用） -->
           <v-row>
             <v-col cols="12" md="6">
               <v-text-field
                 v-model="config.mp_username"
                 label="MoviePilot 用户名"
                 variant="outlined"
-                hint="用于获取 MoviePilot 的 access_token"
+                hint="用于获取 MoviePilot 的 access_token（当手动令牌无效时使用）"
                 persistent-hint
-                :rules="[v => !!v || 'MoviePilot用户名不能为空']"
+                :rules="usernameRules"
               ></v-text-field>
             </v-col>
             <v-col cols="12" md="6">
@@ -133,12 +189,29 @@
                 v-model="config.mp_password"
                 label="MoviePilot 密码"
                 variant="outlined"
-                hint="用于获取 MoviePilot 的 access_token"
+                hint="用于获取 MoviePilot 的 access_token（当手动令牌无效时使用）"
                 persistent-hint
-                :rules="[v => !!v || 'MoviePilot密码不能为空']"
+                :rules="passwordRules"
                 :append-inner-icon="showMpPassword ? 'mdi-eye-off' : 'mdi-eye'"
                 :type="showMpPassword ? 'text' : 'password'"
                 @click:append-inner="showMpPassword = !showMpPassword"
+              ></v-text-field>
+            </v-col>
+          </v-row>
+
+          <!-- 令牌重试配置 -->
+          <v-row>
+            <v-col cols="12" md="6">
+              <v-text-field
+                v-model="config.token_retry_interval"
+                label="令牌重试间隔（秒）"
+                variant="outlined"
+                type="number"
+                min="30"
+                max="300"
+                hint="当令牌获取失败时，自动重试的间隔时间"
+                persistent-hint
+                :rules="[v => !!v || '重试间隔不能为空', v => (parseInt(v) >= 30 && parseInt(v) <= 300) || '重试间隔必须在30-300秒之间']"
               ></v-text-field>
             </v-col>
           </v-row>
@@ -229,7 +302,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed, watch, nextTick } from 'vue'
 
 // 接收初始配置
 const props = defineProps({
@@ -251,8 +324,11 @@ const successMessage = ref(null)
 const saving = ref(false)
 const showApiKey = ref(false)
 const showMpPassword = ref(false)
+const showAccessToken = ref(false)
 const resettingApiKey = ref(false)
 const copyingApiKey = ref(false)
+const copyingAccessToken = ref(false)
+const testingAccessToken = ref(false)
 
 // 表单验证规则
 const portRules = [
@@ -260,6 +336,40 @@ const portRules = [
   v => /^\d+$/.test(v) || '端口号必须是数字',
   v => (parseInt(v) >= 1 && parseInt(v) <= 65535) || '端口号必须在1-65535之间'
 ]
+
+// 动态验证规则 - 根据手动令牌状态决定用户名密码是否必填
+const usernameRules = computed(() => {
+  // 如果有手动令牌且不为空，用户名不是必填的
+  if (config.mp_access_token && config.mp_access_token.trim()) {
+    return []
+  }
+  // 否则用户名是必填的
+  return [v => !!v || 'MoviePilot用户名不能为空']
+})
+
+const passwordRules = computed(() => {
+  // 如果有手动令牌且不为空，密码不是必填的
+  if (config.mp_access_token && config.mp_access_token.trim()) {
+    return []
+  }
+  // 否则密码是必填的
+  return [v => !!v || 'MoviePilot密码不能为空']
+})
+
+// 监听手动令牌变化，触发表单重新验证
+watch(() => config.mp_access_token, async (newValue, oldValue) => {
+  // 检查是否从有值变为空值，或从空值变为有值
+  const hadToken = oldValue && oldValue.trim()
+  const hasToken = newValue && newValue.trim()
+
+  if (hadToken !== hasToken) {
+    // 令牌状态发生变化，需要重新验证表单
+    await nextTick() // 等待DOM更新
+    if (form.value) {
+      form.value.validate() // 触发表单重新验证
+    }
+  }
+})
 
 // 刷新间隔选项
 const refreshIntervalOptions = [
@@ -288,6 +398,8 @@ const defaultConfig = {
   require_auth: true,             // 默认启用认证
   mp_username: 'admin',
   mp_password: '',
+  mp_access_token: '',            // 手动配置的访问令牌
+  token_retry_interval: 60,       // 令牌重试间隔（秒），默认60秒
   dashboard_refresh_interval: 30, // 默认30秒
   dashboard_auto_refresh: true,   // 默认启用自动刷新
   enable_plugin_tools: true,      // 默认启用插件工具
@@ -338,6 +450,16 @@ onMounted(() => {
       // 处理 MoviePilot 密码
       if ('mp_password' in props.initialConfig.config) {
         config.mp_password = props.initialConfig.config.mp_password
+      }
+
+      // 处理手动访问令牌
+      if ('mp_access_token' in props.initialConfig.config) {
+        config.mp_access_token = props.initialConfig.config.mp_access_token
+      }
+
+      // 处理令牌重试间隔
+      if ('token_retry_interval' in props.initialConfig.config) {
+        config.token_retry_interval = props.initialConfig.config.token_retry_interval
       }
 
       // 处理 Dashboard 刷新间隔
@@ -399,6 +521,8 @@ async function saveConfig() {
         require_auth: config.require_auth,
         mp_username: config.mp_username,
         mp_password: config.mp_password,
+        mp_access_token: config.mp_access_token,
+        token_retry_interval: config.token_retry_interval,
         dashboard_refresh_interval: config.dashboard_refresh_interval,
         dashboard_auto_refresh: config.dashboard_auto_refresh,
         enable_plugin_tools: config.enable_plugin_tools,
@@ -613,6 +737,136 @@ async function copyApiKey() {
       }, 500)
     }, 1500)
   }
+}
+
+// 复制访问令牌到剪贴板
+async function copyAccessToken() {
+  if (!config.mp_access_token) {
+    error.value = '访问令牌为空，无法复制'
+    setTimeout(() => { error.value = null }, 3000)
+    return
+  }
+
+  copyingAccessToken.value = true
+  successMessage.value = null
+  error.value = null
+
+  try {
+    // 使用更可靠的复制方法
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(config.mp_access_token)
+      showCopySuccess('访问令牌已复制到剪贴板')
+    } else {
+      // 备用复制方法
+      fallbackCopyAccessToken(config.mp_access_token)
+    }
+  } catch (err) {
+    console.error('复制访问令牌失败:', err)
+    fallbackCopyAccessToken(config.mp_access_token)
+  } finally {
+    copyingAccessToken.value = false
+  }
+
+  // 备用复制方法 - 创建临时文本区域
+  function fallbackCopyAccessToken(text) {
+    const textArea = document.createElement('textarea')
+    textArea.value = text
+
+    // 设置样式使元素不可见
+    textArea.style.position = 'fixed'
+    textArea.style.left = '-999999px'
+    textArea.style.top = '-999999px'
+    document.body.appendChild(textArea)
+
+    // 选择并复制文本
+    textArea.focus()
+    textArea.select()
+
+    let success = false
+    try {
+      success = document.execCommand('copy')
+      if (success) {
+        showCopySuccess('访问令牌已复制到剪贴板')
+      } else {
+        error.value = '复制失败，请手动复制'
+        setTimeout(() => { error.value = null }, 3000)
+      }
+    } catch (err) {
+      console.error('execCommand复制失败:', err)
+      error.value = '复制失败，请手动复制'
+      setTimeout(() => { error.value = null }, 3000)
+    }
+
+    // 清理
+    document.body.removeChild(textArea)
+  }
+}
+
+// 测试访问令牌
+async function testAccessToken() {
+  if (!config.mp_access_token || !config.mp_access_token.trim()) {
+    error.value = '访问令牌为空，无法测试'
+    setTimeout(() => { error.value = null }, 3000)
+    return
+  }
+
+  if (!props.api || !props.api.post) {
+    error.value = 'API接口不可用，无法测试访问令牌'
+    return
+  }
+
+  testingAccessToken.value = true
+  error.value = null
+  successMessage.value = null
+
+  try {
+    // 获取插件ID
+    const pluginId = getPluginId();
+
+    // 调用后端API测试令牌
+    console.log('调用API测试访问令牌:', `plugin/${pluginId}/test-token`)
+    const response = await props.api.post(`plugin/${pluginId}/test-token`, {
+      token: config.mp_access_token.trim()
+    })
+
+    if (response && response.status === 'success' && response.valid) {
+      successMessage.value = response.message || '访问令牌验证成功'
+      console.log('访问令牌验证成功')
+    } else {
+      error.value = response?.message || '访问令牌验证失败'
+      console.log('访问令牌验证失败:', response)
+    }
+  } catch (err) {
+    console.error('测试访问令牌失败:', err)
+    error.value = err.message || '测试访问令牌失败，请检查网络或查看日志'
+  } finally {
+    testingAccessToken.value = false
+    // 5秒后自动清除消息
+    setTimeout(() => {
+      successMessage.value = null
+      error.value = null
+    }, 5000)
+  }
+}
+
+// 显示复制成功的消息（重用现有方法）
+function showCopySuccess(message) {
+  successMessage.value = message
+  setTimeout(() => { successMessage.value = null }, 3000)
+
+  // 创建一个临时的成功提示元素
+  const notification = document.createElement('div')
+  notification.textContent = '✓ 已复制!'
+  notification.className = 'copy-notification'
+  document.body.appendChild(notification)
+
+  // 2秒后移除通知
+  setTimeout(() => {
+    notification.classList.add('fade-out')
+    setTimeout(() => {
+      document.body.removeChild(notification)
+    }, 500)
+  }, 1500)
 }
 </script>
 
