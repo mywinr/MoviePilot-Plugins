@@ -28,7 +28,7 @@ class QbCommand(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/qb_tr.png"
     # 插件版本
-    plugin_version = "2.2"
+    plugin_version = "2.3"
     # 插件作者
     plugin_author = "DzAvril"
     # 作者主页
@@ -62,6 +62,9 @@ class QbCommand(_PluginBase):
     _multi_level_root_domain = ["edu.cn", "com.cn", "net.cn", "org.cn"]
     _scheduler = None
     _exclude_dirs = ""
+
+    # 限速状态数据库键名
+    SPEED_LIMIT_DATA_KEY = "speed_limit_status"
     def init_plugin(self, config: dict = None):
         self._sites = SitesHelper()
         self._siteoper = SiteOper()
@@ -81,8 +84,11 @@ class QbCommand(_PluginBase):
             self._only_pause_checking = config.get("onlypausechecking")
             self._download_limit = config.get("download_limit") or 0
             self._upload_limit = config.get("upload_limit") or 0
-            self._enable_download_limit = config.get("enable_download_limit") or False
-            self._enable_upload_limit = config.get("enable_upload_limit") or False
+            # 移除开关，简化逻辑：0表示不限速，正数表示限速值
+
+            # 存储当前实际的限速值，用于检测变化
+            self._current_download_limits = {}  # {downloader_name: limit_value}
+            self._current_upload_limits = {}    # {downloader_name: limit_value}
 
             self._op_site_ids = config.get("op_site_ids") or []
             self._downloaders = config.get("downloaders")
@@ -129,8 +135,6 @@ class QbCommand(_PluginBase):
                     "exclude_dirs": self._exclude_dirs,
                     "upload_limit": self._upload_limit,
                     "download_limit": self._download_limit,
-                    "enable_upload_limit": self._enable_upload_limit,
-                    "enable_download_limit": self._enable_download_limit,
                 }
             )
 
@@ -198,8 +202,6 @@ class QbCommand(_PluginBase):
                     "exclude_dirs": self._exclude_dirs,
                     "upload_limit": self._upload_limit,
                     "download_limit": self._download_limit,
-                    "enable_upload_limit": self._enable_upload_limit,
-                    "enable_download_limit": self._enable_download_limit,
                 }
             )
 
@@ -345,7 +347,10 @@ class QbCommand(_PluginBase):
         return custom_sites
 
     def get_api(self) -> List[Dict[str, Any]]:
-        pass
+        """
+        获取插件API
+        """
+        return []
 
     def get_service(self) -> List[Dict[str, Any]]:
         """
@@ -1027,9 +1032,6 @@ class QbCommand(_PluginBase):
         self.set_limit(self._upload_limit, self._download_limit)
 
     def set_both_limit(self, upload_limit, download_limit):
-        if not self._enable_upload_limit or not self._enable_download_limit:
-            return True
-
         # 确保参数是字符串类型
         upload_limit = str(upload_limit) if upload_limit is not None else "0"
         download_limit = str(download_limit) if download_limit is not None else "0"
@@ -1055,28 +1057,38 @@ class QbCommand(_PluginBase):
                 continue
 
             # 根据下载器类型调用相应的限速方法
+            success = False
             if downloader_type == "qbittorrent":
                 # qBittorrent需要转换单位
-                flag = flag and downloader_obj.set_speed_limit(
+                logger.debug(f"调用qBittorrent API设置限速: 下载={download_limit} KB/s, 上传={upload_limit} KB/s")
+                success = downloader_obj.set_speed_limit(
                     download_limit=int(download_limit), upload_limit=int(upload_limit)
                 )
+                logger.debug(f"qBittorrent API调用结果: {success}")
             elif downloader_type == "transmission":
                 # Transmission直接使用KB/s，0表示无限制
                 dl_limit = int(download_limit)
                 ul_limit = int(upload_limit)
-                logger.debug(f"设置Transmission限速: 下载={dl_limit} KB/s, 上传={ul_limit} KB/s")
-                flag = flag and downloader_obj.set_speed_limit(
+                logger.debug(f"调用Transmission API设置限速: 下载={dl_limit} KB/s, 上传={ul_limit} KB/s")
+                success = downloader_obj.set_speed_limit(
                     download_limit=dl_limit, upload_limit=ul_limit
                 )
+                logger.debug(f"Transmission API调用结果: {success}")
             else:
                 logger.warning(f"不支持的下载器类型: {downloader_type}")
-                flag = False
+                success = False
+
+            # 如果设置成功，保存状态到数据库
+            if success:
+                logger.debug(f"API调用成功，保存状态到数据库: {downloader_name}")
+                self.save_speed_limit_status(downloader_name, int(download_limit), int(upload_limit))
+            else:
+                logger.error(f"API调用失败，不保存状态到数据库: {downloader_name}")
+
+            flag = flag and success
         return flag
 
     def set_upload_limit(self, upload_limit):
-        if not self._enable_upload_limit:
-            return True
-
         # 确保参数是字符串类型
         upload_limit = str(upload_limit) if upload_limit is not None else "0"
 
@@ -1096,38 +1108,44 @@ class QbCommand(_PluginBase):
                 logger.error(f"获取下载器失败 {downloader_name}")
                 continue
 
-            # 获取当前下载限速
-            speed_limit_result = downloader_obj.get_speed_limit()
-            if speed_limit_result:
-                download_limit_current_val, _ = speed_limit_result
-                # 确保值不为None
-                download_limit_current_val = download_limit_current_val if download_limit_current_val is not None else 0
-            else:
-                download_limit_current_val = 0
+            # 从数据库获取当前下载限速
+            current_dl, _ = self.get_speed_limit_status(downloader_name)
+            download_limit_current_val = current_dl if current_dl is not None else 0
 
             # 根据下载器类型设置限速
+            success = False
             if downloader_type == "qbittorrent":
-                flag = flag and downloader_obj.set_speed_limit(
+                logger.debug(f"调用qBittorrent API设置上传限速: 下载={download_limit_current_val} KB/s, 上传={upload_limit} KB/s")
+                success = downloader_obj.set_speed_limit(
                     download_limit=int(download_limit_current_val),
                     upload_limit=int(upload_limit),
                 )
+                logger.debug(f"qBittorrent API调用结果: {success}")
             elif downloader_type == "transmission":
                 # Transmission直接使用KB/s，0表示无限制
                 dl_limit = int(download_limit_current_val)
                 ul_limit = int(upload_limit)
-                flag = flag and downloader_obj.set_speed_limit(
+                logger.debug(f"调用Transmission API设置上传限速: 下载={dl_limit} KB/s, 上传={ul_limit} KB/s")
+                success = downloader_obj.set_speed_limit(
                     download_limit=dl_limit,
                     upload_limit=ul_limit,
                 )
+                logger.debug(f"Transmission API调用结果: {success}")
             else:
                 logger.warning(f"不支持的下载器类型: {downloader_type}")
-                flag = False
+                success = False
+
+            # 如果设置成功，保存状态到数据库
+            if success:
+                logger.debug(f"上传限速API调用成功，保存状态到数据库: {downloader_name}")
+                self.save_speed_limit_status(downloader_name, int(download_limit_current_val), int(upload_limit))
+            else:
+                logger.error(f"上传限速API调用失败，不保存状态到数据库: {downloader_name}")
+
+            flag = flag and success
         return flag
 
     def set_download_limit(self, download_limit):
-        if not self._enable_download_limit:
-            return True
-
         # 确保参数是字符串类型
         download_limit = str(download_limit) if download_limit is not None else "0"
 
@@ -1148,75 +1166,240 @@ class QbCommand(_PluginBase):
                 logger.error(f"获取下载器失败 {downloader_name}")
                 continue
 
-            # 获取当前上传限速
-            speed_limit_result = downloader_obj.get_speed_limit()
-            if speed_limit_result:
-                _, upload_limit_current_val = speed_limit_result
-                # 确保值不为None
-                upload_limit_current_val = upload_limit_current_val if upload_limit_current_val is not None else 0
-            else:
-                upload_limit_current_val = 0
+            # 从数据库获取当前上传限速
+            _, current_ul = self.get_speed_limit_status(downloader_name)
+            upload_limit_current_val = current_ul if current_ul is not None else 0
 
             # 根据下载器类型设置限速
+            success = False
             if downloader_type == "qbittorrent":
-                flag = flag and downloader_obj.set_speed_limit(
+                logger.debug(f"调用qBittorrent API设置下载限速: 下载={download_limit} KB/s, 上传={upload_limit_current_val} KB/s")
+                success = downloader_obj.set_speed_limit(
                     download_limit=int(download_limit),
                     upload_limit=int(upload_limit_current_val),
                 )
+                logger.debug(f"qBittorrent API调用结果: {success}")
             elif downloader_type == "transmission":
                 # Transmission直接使用KB/s，0表示无限制
                 dl_limit = int(download_limit)
                 ul_limit = int(upload_limit_current_val)
-                flag = flag and downloader_obj.set_speed_limit(
+                logger.debug(f"调用Transmission API设置下载限速: 下载={dl_limit} KB/s, 上传={ul_limit} KB/s")
+                success = downloader_obj.set_speed_limit(
                     download_limit=dl_limit,
                     upload_limit=ul_limit,
                 )
+                logger.debug(f"Transmission API调用结果: {success}")
             else:
                 logger.warning(f"不支持的下载器类型: {downloader_type}")
-                flag = False
+                success = False
+
+            # 如果设置成功，保存状态到数据库
+            if success:
+                logger.debug(f"下载限速API调用成功，保存状态到数据库: {downloader_name}")
+                self.save_speed_limit_status(downloader_name, int(download_limit), int(upload_limit_current_val))
+            else:
+                logger.error(f"下载限速API调用失败，不保存状态到数据库: {downloader_name}")
+
+            flag = flag and success
         return flag
 
+    def check_speed_limit_changes(self, upload_limit, download_limit):
+        """
+        检查限速值是否发生变化（基于数据库中保存的状态）
+        返回: (has_changes, changed_downloaders)
+        """
+        if not self.service_info:
+            return False, []
+
+        upload_limit = int(upload_limit) if upload_limit is not None else 0
+        download_limit = int(download_limit) if download_limit is not None else 0
+
+        changed_downloaders = []
+
+        for service_name, _ in self.service_info.items():
+            try:
+                # 从数据库获取当前保存的限速状态
+                current_dl, current_ul = self.get_speed_limit_status(service_name)
+
+                # 如果数据库中没有保存的状态（初始状态），则认为当前限速为未知
+                if current_dl is None or current_ul is None:
+                    logger.debug(f"下载器 {service_name} 限速状态未知（初始状态），将设置为目标限速")
+                    changed_downloaders.append({
+                        'name': service_name,
+                        'old_download': 0,  # 未知状态显示为0
+                        'old_upload': 0,    # 未知状态显示为0
+                        'new_download': download_limit,
+                        'new_upload': upload_limit,
+                        'is_initial': True  # 标记为初始设置
+                    })
+                else:
+                    # 检查是否有变化
+                    if current_dl != download_limit or current_ul != upload_limit:
+                        logger.debug(f"检测到下载器 {service_name} 限速变化: "
+                                   f"下载 {current_dl}KB/s → {download_limit}KB/s, "
+                                   f"上传 {current_ul}KB/s → {upload_limit}KB/s")
+                        changed_downloaders.append({
+                            'name': service_name,
+                            'old_download': current_dl,
+                            'old_upload': current_ul,
+                            'new_download': download_limit,
+                            'new_upload': upload_limit,
+                            'is_initial': False
+                        })
+                    else:
+                        logger.debug(f"下载器 {service_name} 限速无变化: 下载={download_limit}KB/s, 上传={upload_limit}KB/s")
+
+            except Exception as e:
+                logger.error(f"检查下载器 {service_name} 限速变化时出错: {str(e)}")
+                # 如果出错，假设需要更新
+                changed_downloaders.append({
+                    'name': service_name,
+                    'old_download': 0,
+                    'old_upload': 0,
+                    'new_download': download_limit,
+                    'new_upload': upload_limit,
+                    'is_initial': True
+                })
+
+        return len(changed_downloaders) > 0, changed_downloaders
+
+    def save_speed_limit_status(self, downloader_name: str, download_limit: int, upload_limit: int):
+        """
+        保存下载器的限速状态到数据库
+        """
+        try:
+            # 获取现有的限速状态数据
+            speed_limit_data = self.get_data(self.SPEED_LIMIT_DATA_KEY) or {}
+
+            # 更新指定下载器的限速状态
+            speed_limit_data[downloader_name] = {
+                'download_limit': download_limit,
+                'upload_limit': upload_limit,
+                'updated_time': time.time()
+            }
+
+            # 保存到数据库
+            self.save_data(self.SPEED_LIMIT_DATA_KEY, speed_limit_data)
+            logger.debug(f"已保存下载器 {downloader_name} 的限速状态: 下载={download_limit}KB/s, 上传={upload_limit}KB/s")
+
+        except Exception as e:
+            logger.error(f"保存下载器 {downloader_name} 限速状态失败: {str(e)}")
+
+    def get_speed_limit_status(self, downloader_name: str = None):
+        """
+        从数据库获取下载器的限速状态
+        """
+        try:
+            speed_limit_data = self.get_data(self.SPEED_LIMIT_DATA_KEY) or {}
+
+            if downloader_name:
+                # 获取指定下载器的限速状态
+                downloader_data = speed_limit_data.get(downloader_name)
+                if downloader_data:
+                    return downloader_data.get('download_limit', 0), downloader_data.get('upload_limit', 0)
+                else:
+                    # 如果没有保存的状态，返回未知状态
+                    logger.debug(f"下载器 {downloader_name} 的限速状态未知（初始状态）")
+                    return None, None
+            else:
+                # 返回所有下载器的限速状态
+                return speed_limit_data
+
+        except Exception as e:
+            logger.error(f"获取下载器 {downloader_name or '所有'} 限速状态失败: {str(e)}")
+            return None, None if downloader_name else {}
+
     def set_limit(self, upload_limit, download_limit):
-        # 限速，满足以下三种情况设置限速
-        # 1. 插件启用 && download_limit启用
-        # 2. 插件启用 && upload_limit启用
-        # 3. 插件启用 && download_limit启用 && upload_limit启用
+        # 简化限速逻辑：0表示不限速，正数表示限速值(KB/s)
 
         # 确保参数不为None
         upload_limit = upload_limit if upload_limit is not None else 0
         download_limit = download_limit if download_limit is not None else 0
 
+        if not self._enabled:
+            return True
+
+        # 检查限速值是否发生变化
+        has_changes, changed_downloaders = self.check_speed_limit_changes(upload_limit, download_limit)
+
+        if not has_changes:
+            logger.debug("限速值未发生变化，跳过设置")
+            return True
+
+        # 分析变化类型，决定调用哪个设置方法
+        upload_changed = False
+        download_changed = False
+
+        for change in changed_downloaders:
+            if change['old_upload'] != change['new_upload']:
+                upload_changed = True
+            if change['old_download'] != change['new_download']:
+                download_changed = True
+
         flag = None
-        if self._enabled and self._enable_download_limit and self._enable_upload_limit:
+        if upload_changed and download_changed:
+            # 上传和下载都有变化，使用set_both_limit
+            logger.debug(f"上传和下载限速都有变化，调用set_both_limit")
             flag = self.set_both_limit(upload_limit, download_limit)
-
-        elif flag is None and self._enabled and self._enable_download_limit:
+        elif download_changed:
+            # 只有下载限速变化，使用set_download_limit
+            logger.debug(f"只有下载限速变化，调用set_download_limit")
             flag = self.set_download_limit(download_limit)
-
-        elif flag is None and self._enabled and self._enable_upload_limit:
+        elif upload_changed:
+            # 只有上传限速变化，使用set_upload_limit
+            logger.debug(f"只有上传限速变化，调用set_upload_limit")
             flag = self.set_upload_limit(upload_limit)
+        else:
+            # 理论上不应该到这里，因为前面已经检查过has_changes
+            logger.warning(f"检测到变化但无法确定变化类型，使用set_both_limit")
+            flag = self.set_both_limit(upload_limit, download_limit)
 
         if flag == True:
             logger.info(f"设置下载器限速成功")
             if self._notify:
-                upload_text = "🚀 无限制" if upload_limit == 0 else f"🚀 {upload_limit} KB/s"
-                download_text = "📥 无限制" if download_limit == 0 else f"📥 {download_limit} KB/s"
+                # 使用变化信息生成通知
+                affected_downloaders = [change['name'] for change in changed_downloaders]
+
+                upload_text = "无限制" if upload_limit == 0 else f"{upload_limit} KB/s"
+                download_text = "无限制" if download_limit == 0 else f"{download_limit} KB/s"
+
+                # 构建下载器列表文本
+                if len(affected_downloaders) == 1:
+                    downloader_text = f"🎯 下载器: {affected_downloaders[0]}"
+                else:
+                    downloader_text = f"🎯 下载器: {', '.join(affected_downloaders)}"
+
+                # 构建变化详情
+                change_details = []
+                for change in changed_downloaders:
+                    old_ul_text = "无限制" if change['old_upload'] == 0 else f"{change['old_upload']} KB/s"
+                    old_dl_text = "无限制" if change['old_download'] == 0 else f"{change['old_download']} KB/s"
+                    new_ul_text = "无限制" if change['new_upload'] == 0 else f"{change['new_upload']} KB/s"
+                    new_dl_text = "无限制" if change['new_download'] == 0 else f"{change['new_download']} KB/s"
+                    change_details.append(f"  📱 {change['name']}: ⬆️{old_ul_text}→{new_ul_text}, ⬇️{old_dl_text}→{new_dl_text}")
+
+                detail_text = "\n".join(change_details) if len(change_details) <= 3 else f"共 {len(change_details)} 个下载器限速已更新"
 
                 self.post_message(
                     mtype=NotificationType.SiteMessage,
                     title=f"⚡ 下载器限速设置成功",
-                    text=f"🎯 已应用到所有下载器\n\n"
-                    f"📊 限速配置:\n"
+                    text=f"{downloader_text}\n\n"
+                    f"📊 新限速配置:\n"
                     f"  ⬆️ 上传: {upload_text}\n"
-                    f"  ⬇️ 下载: {download_text}",
+                    f"  ⬇️ 下载: {download_text}\n\n"
+                    f"📋 变化详情:\n{detail_text}",
                 )
         elif flag == False:
             logger.error(f"下载器设置限速失败")
             if self._notify:
+                # 获取失败的下载器列表
+                failed_downloaders = [change['name'] for change in changed_downloaders]
+                downloader_text = ', '.join(failed_downloaders) if failed_downloaders else "未知下载器"
+
                 self.post_message(
                     mtype=NotificationType.SiteMessage,
                     title=f"❌ 下载器限速设置失败",
-                    text=f"❌ 设置下载器限速失败\n🔧 请检查下载器连接状态",
+                    text=f"❌ 设置下载器限速失败\n🎯 影响的下载器: {downloader_text}\n🔧 请检查下载器连接状态",
                 )
 
     def get_torrent_tracker(self, torrent):
@@ -1296,305 +1479,458 @@ class QbCommand(_PluginBase):
             {
                 "component": "VForm",
                 "content": [
+                    # 基础设置区域
                     {
-                        "component": "VRow",
+                        "component": "VCard",
+                        "props": {
+                            "class": "mb-4",
+                            "variant": "outlined"
+                        },
                         "content": [
                             {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 6},
-                                "content": [
-                                    {
-                                        "component": "VSwitch",
-                                        "props": {
-                                            "model": "enabled",
-                                            "label": "启用插件",
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 6},
-                                "content": [
-                                    {
-                                        "component": "VSwitch",
-                                        "props": {
-                                            "model": "notify",
-                                            "label": "发送通知",
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 6},
-                                "content": [
-                                    {
-                                        "component": "VSwitch",
-                                        "props": {
-                                            "model": "onlypauseonce",
-                                            "label": "立即暂停所有任务",
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 6},
-                                "content": [
-                                    {
-                                        "component": "VSwitch",
-                                        "props": {
-                                            "model": "onlyresumeonce",
-                                            "label": "立即开始所有任务",
-                                        },
-                                    }
-                                ],
-                            },
-                        ],
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12
+                                "component": "VCardTitle",
+                                "props": {
+                                    "class": "text-h6 pa-4 pb-2"
                                 },
-                                'content': [
+                                "text": "🔧 基础设置"
+                            },
+                            {
+                                "component": "VCardText",
+                                "content": [
                                     {
-                                        'component': 'VSelect',
-                                        'props': {
-                                            'multiple': True,
-                                            'chips': True,
-                                            'clearable': True,
-                                            'model': 'downloaders',
-                                            'label': '下载器',
-                                            'items': [{"title": config.name, "value": config.name}
-                                                      for config in self.downloader_helper.get_configs().values()]
-                                        }
+                                        "component": "VRow",
+                                        "content": [
+                                            {
+                                                "component": "VCol",
+                                                "props": {"cols": 12, "md": 6},
+                                                "content": [
+                                                    {
+                                                        "component": "VSwitch",
+                                                        "props": {
+                                                            "model": "enabled",
+                                                            "label": "启用插件",
+                                                            "color": "primary",
+                                                        },
+                                                    }
+                                                ],
+                                            },
+                                            {
+                                                "component": "VCol",
+                                                "props": {"cols": 12, "md": 6},
+                                                "content": [
+                                                    {
+                                                        "component": "VSwitch",
+                                                        "props": {
+                                                            "model": "notify",
+                                                            "label": "发送通知",
+                                                            "color": "primary",
+                                                        },
+                                                    }
+                                                ],
+                                            },
+                                        ],
+                                    },
+                                    {
+                                        "component": "VRow",
+                                        "content": [
+                                            {
+                                                "component": "VCol",
+                                                "props": {"cols": 12},
+                                                "content": [
+                                                    {
+                                                        "component": "VSelect",
+                                                        "props": {
+                                                            "multiple": True,
+                                                            "chips": True,
+                                                            "clearable": True,
+                                                            "model": "downloaders",
+                                                            "label": "选择下载器",
+                                                            "hint": "选择要管理的下载器，支持qBittorrent和Transmission",
+                                                            "persistent-hint": True,
+                                                            "items": [{"title": config.name, "value": config.name}
+                                                                      for config in self.downloader_helper.get_configs().values()]
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
                                     }
                                 ]
                             }
                         ]
                     },
+
+                    # 定时任务设置区域
                     {
-                        "component": "VRow",
+                        "component": "VCard",
+                        "props": {
+                            "class": "mb-4",
+                            "variant": "outlined"
+                        },
                         "content": [
                             {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 6},
-                                "content": [
-                                    {
-                                        "component": "VTextField",
-                                        "props": {
-                                            "model": "pause_cron",
-                                            "label": "暂停周期",
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 6},
-                                "content": [
-                                    {
-                                        "component": "VTextField",
-                                        "props": {
-                                            "model": "resume_cron",
-                                            "label": "开始周期",
-                                        },
-                                    }
-                                ],
-                            },
-                        ],
-                    },
-                    {
-                        "component": "VRow",
-                        "content": [
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 6},
-                                "content": [
-                                    {
-                                        "component": "VSwitch",
-                                        "props": {
-                                            "model": "enable_upload_limit",
-                                            "label": "上传限速",
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 6},
-                                "content": [
-                                    {
-                                        "component": "VSwitch",
-                                        "props": {
-                                            "model": "enable_download_limit",
-                                            "label": "下载限速",
-                                        },
-                                    }
-                                ],
-                            },
-                        ],
-                    },
-                    {
-                        "component": "VRow",
-                        "content": [
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 6},
-                                "content": [
-                                    {
-                                        "component": "VTextField",
-                                        "props": {
-                                            "model": "upload_limit",
-                                            "label": "上传限速 KB/s",
-                                            "placeholder": "KB/s",
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 6},
-                                "content": [
-                                    {
-                                        "component": "VTextField",
-                                        "props": {
-                                            "model": "download_limit",
-                                            "label": "下载限速 KB/s",
-                                            "placeholder": "KB/s",
-                                        },
-                                    }
-                                ],
-                            },
-                        ],
-                    },
-                    {
-                        "component": "VRow",
-                        "content": [
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
-                                "content": [
-                                    {
-                                        "component": "VSwitch",
-                                        "props": {
-                                            "model": "onlypauseupload",
-                                            "label": "暂停上传任务",
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
-                                "content": [
-                                    {
-                                        "component": "VSwitch",
-                                        "props": {
-                                            "model": "onlypausedownload",
-                                            "label": "暂停下载任务",
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
-                                "content": [
-                                    {
-                                        "component": "VSwitch",
-                                        "props": {
-                                            "model": "onlypausechecking",
-                                            "label": "暂停检查任务",
-                                        },
-                                    }
-                                ],
-                            },
-                        ],
-                    },
-                    {
-                        "component": "VRow",
-                        "content": [
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12},
-                                "content": [
-                                    {
-                                        "component": "VSelect",
-                                        "props": {
-                                            "chips": True,
-                                            "multiple": True,
-                                            "model": "op_site_ids",
-                                            "label": "停止保种站点(暂停保种后不会被恢复)",
-                                            "items": site_options,
-                                        },
-                                    }
-                                ],
-                            }
-                        ],
-                    },
-                    {
-                        "component": "VRow",
-                        "content": [
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12},
-                                "content": [
-                                    {
-                                        "component": "VTextarea",
-                                        "props": {
-                                            "model": "exclude_dirs",
-                                            "label": "不暂停保种目录",
-                                            "rows": 5,
-                                            "placeholder": "该目录下的做种不会暂停，一行一个目录",
-                                        },
-                                    }
-                                ],
-                            }
-                        ],
-                    },
-                    {
-                        "component": "VRow",
-                        "content": [
-                            {
-                                "component": "VCol",
+                                "component": "VCardTitle",
                                 "props": {
-                                    "cols": 12,
+                                    "class": "text-h6 pa-4 pb-2"
                                 },
+                                "text": "⏰ 定时任务设置"
+                            },
+                            {
+                                "component": "VCardText",
+                                "content": [
+                                    {
+                                        "component": "VRow",
+                                        "content": [
+                                            {
+                                                "component": "VCol",
+                                                "props": {"cols": 12, "md": 6},
+                                                "content": [
+                                                    {
+                                                        "component": "VTextField",
+                                                        "props": {
+                                                            "model": "pause_cron",
+                                                            "label": "暂停周期",
+                                                            "placeholder": "0 2 * * *",
+                                                            "hint": "使用Cron表达式，如：0 2 * * * (每天凌晨2点)",
+                                                            "persistent-hint": True,
+                                                        },
+                                                    }
+                                                ],
+                                            },
+                                            {
+                                                "component": "VCol",
+                                                "props": {"cols": 12, "md": 6},
+                                                "content": [
+                                                    {
+                                                        "component": "VTextField",
+                                                        "props": {
+                                                            "model": "resume_cron",
+                                                            "label": "恢复周期",
+                                                            "placeholder": "0 8 * * *",
+                                                            "hint": "使用Cron表达式，如：0 8 * * * (每天早上8点)",
+                                                            "persistent-hint": True,
+                                                        },
+                                                    }
+                                                ],
+                                            },
+                                        ],
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+
+                    # 限速设置区域
+                    {
+                        "component": "VCard",
+                        "props": {
+                            "class": "mb-4",
+                            "variant": "outlined"
+                        },
+                        "content": [
+                            {
+                                "component": "VCardTitle",
+                                "props": {
+                                    "class": "text-h6 pa-4 pb-2"
+                                },
+                                "text": "🚀 限速设置"
+                            },
+                            {
+                                "component": "VCardText",
+                                "content": [
+                                    {
+                                        "component": "VRow",
+                                        "content": [
+                                            {
+                                                "component": "VCol",
+                                                "props": {"cols": 12, "md": 6},
+                                                "content": [
+                                                    {
+                                                        "component": "VTextField",
+                                                        "props": {
+                                                            "model": "upload_limit",
+                                                            "label": "上传限速",
+                                                            "placeholder": "0",
+                                                            "suffix": "KB/s",
+                                                            "hint": "0表示不限速，设置后立即生效",
+                                                            "persistent-hint": True,
+                                                            "type": "number",
+                                                        },
+                                                    }
+                                                ],
+                                            },
+                                            {
+                                                "component": "VCol",
+                                                "props": {"cols": 12, "md": 6},
+                                                "content": [
+                                                    {
+                                                        "component": "VTextField",
+                                                        "props": {
+                                                            "model": "download_limit",
+                                                            "label": "下载限速",
+                                                            "placeholder": "0",
+                                                            "suffix": "KB/s",
+                                                            "hint": "0表示不限速，设置后立即生效",
+                                                            "persistent-hint": True,
+                                                            "type": "number",
+                                                        },
+                                                    }
+                                                ],
+                                            },
+                                        ],
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+
+                    # 立即操作区域
+                    {
+                        "component": "VCard",
+                        "props": {
+                            "class": "mb-4",
+                            "variant": "outlined"
+                        },
+                        "content": [
+                            {
+                                "component": "VCardTitle",
+                                "props": {
+                                    "class": "text-h6 pa-4 pb-2"
+                                },
+                                "text": "⚡ 立即操作"
+                            },
+                            {
+                                "component": "VCardText",
                                 "content": [
                                     {
                                         "component": "VAlert",
                                         "props": {
-                                            "type": "info",
+                                            "type": "warning",
                                             "variant": "tonal",
-                                            "text": "开始周期和暂停周期使用Cron表达式，如：0 0 0 * *，仅针对开始/暂定全部任务",
-                                        },
+                                            "class": "mb-3",
+                                            "text": "⚠️ 以下操作将立即执行，执行后开关会自动关闭"
+                                        }
+                                    },
+                                    {
+                                        "component": "VRow",
+                                        "content": [
+                                            {
+                                                "component": "VCol",
+                                                "props": {"cols": 12, "md": 6},
+                                                "content": [
+                                                    {
+                                                        "component": "VSwitch",
+                                                        "props": {
+                                                            "model": "onlypauseonce",
+                                                            "label": "立即暂停所有任务",
+                                                            "color": "warning",
+                                                        },
+                                                    }
+                                                ],
+                                            },
+                                            {
+                                                "component": "VCol",
+                                                "props": {"cols": 12, "md": 6},
+                                                "content": [
+                                                    {
+                                                        "component": "VSwitch",
+                                                        "props": {
+                                                            "model": "onlyresumeonce",
+                                                            "label": "立即恢复所有任务",
+                                                            "color": "success",
+                                                        },
+                                                    }
+                                                ],
+                                            },
+                                        ],
+                                    },
+                                    {
+                                        "component": "VRow",
+                                        "content": [
+                                            {
+                                                "component": "VCol",
+                                                "props": {"cols": 12, "md": 4},
+                                                "content": [
+                                                    {
+                                                        "component": "VSwitch",
+                                                        "props": {
+                                                            "model": "onlypauseupload",
+                                                            "label": "暂停上传任务",
+                                                            "color": "orange",
+                                                        },
+                                                    }
+                                                ],
+                                            },
+                                            {
+                                                "component": "VCol",
+                                                "props": {"cols": 12, "md": 4},
+                                                "content": [
+                                                    {
+                                                        "component": "VSwitch",
+                                                        "props": {
+                                                            "model": "onlypausedownload",
+                                                            "label": "暂停下载任务",
+                                                            "color": "orange",
+                                                        },
+                                                    }
+                                                ],
+                                            },
+                                            {
+                                                "component": "VCol",
+                                                "props": {"cols": 12, "md": 4},
+                                                "content": [
+                                                    {
+                                                        "component": "VSwitch",
+                                                        "props": {
+                                                            "model": "onlypausechecking",
+                                                            "label": "暂停检查任务",
+                                                            "color": "orange",
+                                                        },
+                                                    }
+                                                ],
+                                            },
+                                        ],
                                     }
-                                ],
+                                ]
+                            }
+                        ]
+                    },
+
+                    # 高级设置区域
+                    {
+                        "component": "VCard",
+                        "props": {
+                            "class": "mb-4",
+                            "variant": "outlined"
+                        },
+                        "content": [
+                            {
+                                "component": "VCardTitle",
+                                "props": {
+                                    "class": "text-h6 pa-4 pb-2"
+                                },
+                                "text": "⚙️ 高级设置"
                             },
                             {
-                                "component": "VCol",
-                                "props": {
-                                    "cols": 12,
-                                },
+                                "component": "VCardText",
                                 "content": [
                                     {
-                                        "component": "VAlert",
-                                        "props": {
-                                            "type": "info",
-                                            "variant": "tonal",
-                                            "text": "交互命令有暂停下载器种子、开始下载器种子、下载器切换上传限速状态、下载器切换下载限速状态",
-                                        },
+                                        "component": "VRow",
+                                        "content": [
+                                            {
+                                                "component": "VCol",
+                                                "props": {"cols": 12},
+                                                "content": [
+                                                    {
+                                                        "component": "VSelect",
+                                                        "props": {
+                                                            "chips": True,
+                                                            "multiple": True,
+                                                            "model": "op_site_ids",
+                                                            "label": "停止保种站点",
+                                                            "hint": "选中的站点在暂停保种后不会被恢复",
+                                                            "persistent-hint": True,
+                                                            "items": site_options,
+                                                        },
+                                                    }
+                                                ],
+                                            }
+                                        ],
+                                    },
+                                    {
+                                        "component": "VRow",
+                                        "content": [
+                                            {
+                                                "component": "VCol",
+                                                "props": {"cols": 12},
+                                                "content": [
+                                                    {
+                                                        "component": "VTextarea",
+                                                        "props": {
+                                                            "model": "exclude_dirs",
+                                                            "label": "排除目录",
+                                                            "rows": 4,
+                                                            "placeholder": "该目录下的种子不会被暂停，一行一个目录\n例如：\n/downloads/important\n/media/movies",
+                                                            "hint": "这些目录下的种子不会被暂停操作影响",
+                                                            "persistent-hint": True,
+                                                        },
+                                                    }
+                                                ],
+                                            }
+                                        ],
                                     }
-                                ],
-                            },
-                        ],
+                                ]
+                            }
+                        ]
                     },
+
+                    # 帮助信息区域
+                    {
+                        "component": "VCard",
+                        "props": {
+                            "class": "mb-4",
+                            "variant": "tonal",
+                            "color": "info"
+                        },
+                        "content": [
+                            {
+                                "component": "VCardTitle",
+                                "props": {
+                                    "class": "text-h6 pa-4 pb-2"
+                                },
+                                "text": "💡 使用说明"
+                            },
+                            {
+                                "component": "VCardText",
+                                "content": [
+                                    {
+                                        "component": "VList",
+                                        "props": {
+                                            "density": "compact"
+                                        },
+                                        "content": [
+                                            {
+                                                "component": "VListItem",
+                                                "props": {
+                                                    "prepend-icon": "mdi-clock-outline"
+                                                },
+                                                "content": [
+                                                    {
+                                                        "component": "VListItemTitle",
+                                                        "text": "定时任务使用Cron表达式，格式：分 时 日 月 周"
+                                                    }
+                                                ]
+                                            },
+                                            {
+                                                "component": "VListItem",
+                                                "props": {
+                                                    "prepend-icon": "mdi-speedometer"
+                                                },
+                                                "content": [
+                                                    {
+                                                        "component": "VListItemTitle",
+                                                        "text": "限速设置会立即应用到所有选中的下载器"
+                                                    }
+                                                ]
+                                            },
+                                            {
+                                                "component": "VListItem",
+                                                "props": {
+                                                    "prepend-icon": "mdi-message-outline"
+                                                },
+                                                "content": [
+                                                    {
+                                                        "component": "VListItemTitle",
+                                                        "text": "支持交互命令：/pause_torrents、/resume_torrents、/downloader_status等"
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    }
                 ],
             }
         ], {
@@ -1607,13 +1943,241 @@ class QbCommand(_PluginBase):
             "onlypausechecking": False,
             "upload_limit": 0,
             "download_limit": 0,
-            "enable_upload_limit": False,
-            "enable_download_limit": False,
             "op_site_ids": [],
         }
 
+    def get_downloader_speed_status(self):
+        """
+        获取所有下载器的限速状态（从数据库获取）
+        """
+        if not self.service_info:
+            return []
+
+        status_list = []
+        for service_name, service in self.service_info.items():
+            downloader_obj = service.instance
+            downloader_type = self.get_downloader_type(service)
+
+            try:
+                # 从数据库获取限速状态
+                download_limit, upload_limit = self.get_speed_limit_status(service_name)
+
+                # 如果数据库中没有保存的状态，显示为未知
+                if download_limit is None or upload_limit is None:
+                    download_limit, upload_limit = 0, 0
+                    status_text = "未知（初始状态）"
+                else:
+                    status_text = "已设置"
+
+                # 获取传输统计信息
+                transfer_info = downloader_obj.transfer_info()
+                if transfer_info:
+                    if downloader_type == "qbittorrent":
+                        # qBittorrent返回的是字节/秒，转换为KB/s
+                        current_dl_speed = getattr(transfer_info, 'dl_info_speed', 0) / 1024
+                        current_ul_speed = getattr(transfer_info, 'up_info_speed', 0) / 1024
+                    else:  # transmission
+                        # Transmission返回的是字节/秒，转换为KB/s
+                        current_dl_speed = getattr(transfer_info, 'download_speed', 0) / 1024
+                        current_ul_speed = getattr(transfer_info, 'upload_speed', 0) / 1024
+                else:
+                    current_dl_speed, current_ul_speed = 0, 0
+
+                status_info = {
+                    'name': service_name,
+                    'type': downloader_type,
+                    'download_limit': int(download_limit),
+                    'upload_limit': int(upload_limit),
+                    'current_download_speed': round(current_dl_speed, 1),
+                    'current_upload_speed': round(current_ul_speed, 1),
+                    'status': 'active' if downloader_obj else 'inactive',
+                    'limit_status': status_text
+                }
+
+                status_list.append(status_info)
+
+            except Exception as e:
+                logger.error(f"获取下载器 {service_name} 状态失败: {str(e)}")
+                status_list.append({
+                    'name': service_name,
+                    'type': downloader_type,
+                    'download_limit': 0,
+                    'upload_limit': 0,
+                    'current_download_speed': 0,
+                    'current_upload_speed': 0,
+                    'status': 'error',
+                    'limit_status': '错误'
+                })
+
+        return status_list
+
     def get_page(self) -> List[dict]:
-        pass
+        """
+        插件页面
+        """
+        if not self._enabled:
+            return [
+                {
+                    'component': 'div',
+                    'text': '插件未启用',
+                    'props': {
+                        'class': 'text-center text-muted'
+                    }
+                }
+            ]
+
+        # 获取下载器状态
+        downloader_status = self.get_downloader_speed_status()
+
+        if not downloader_status:
+            return [
+                {
+                    'component': 'div',
+                    'text': '未找到可用的下载器',
+                    'props': {
+                        'class': 'text-center text-muted'
+                    }
+                }
+            ]
+
+        # 构建下载器状态卡片
+        cards = []
+        for status in downloader_status:
+            # 状态图标
+            if status['status'] == 'active':
+                status_icon = '🟢'
+            elif status['status'] == 'inactive':
+                status_icon = '🔴'
+            else:
+                status_icon = '⚠️'
+
+            # 限速状态文本
+            dl_limit_text = f"{status['download_limit']} KB/s" if status['download_limit'] > 0 else "无限制"
+            ul_limit_text = f"{status['upload_limit']} KB/s" if status['upload_limit'] > 0 else "无限制"
+
+            # 添加状态标识
+            if status.get('limit_status') == "未知（初始状态）":
+                dl_limit_text += " (初始)"
+                ul_limit_text += " (初始)"
+
+            card = {
+                'component': 'VCard',
+                'props': {
+                    'class': 'mb-3'
+                },
+                'content': [
+                    {
+                        'component': 'VCardTitle',
+                        'props': {
+                            'class': 'd-flex align-center'
+                        },
+                        'content': [
+                            {
+                                'component': 'span',
+                                'text': f"{status_icon} {status['name']} ({status['type'].upper()})"
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VCardText',
+                        'content': [
+                            {
+                                'component': 'VRow',
+                                'content': [
+                                    {
+                                        'component': 'VCol',
+                                        'props': {'cols': 6},
+                                        'content': [
+                                            {
+                                                'component': 'div',
+                                                'props': {'class': 'text-subtitle-2 mb-1'},
+                                                'text': '📥 下载限速'
+                                            },
+                                            {
+                                                'component': 'div',
+                                                'props': {'class': 'text-h6'},
+                                                'text': dl_limit_text
+                                            },
+                                            {
+                                                'component': 'div',
+                                                'props': {'class': 'text-caption text-medium-emphasis'},
+                                                'text': f"当前速度: {status['current_download_speed']} KB/s"
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        'component': 'VCol',
+                                        'props': {'cols': 6},
+                                        'content': [
+                                            {
+                                                'component': 'div',
+                                                'props': {'class': 'text-subtitle-2 mb-1'},
+                                                'text': '📤 上传限速'
+                                            },
+                                            {
+                                                'component': 'div',
+                                                'props': {'class': 'text-h6'},
+                                                'text': ul_limit_text
+                                            },
+                                            {
+                                                'component': 'div',
+                                                'props': {'class': 'text-caption text-medium-emphasis'},
+                                                'text': f"当前速度: {status['current_upload_speed']} KB/s"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+            cards.append(card)
+
+        return [
+            {
+                'component': 'div',
+                'content': [
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12},
+                                'content': [
+                                    {
+                                        'component': 'div',
+                                        'props': {'class': 'mb-4'},
+                                        'content': [
+                                            {
+                                                'component': 'div',
+                                                'props': {'class': 'text-h5'},
+                                                'text': '📊 下载器限速状态'
+                                            },
+                                            {
+                                                'component': 'div',
+                                                'props': {'class': 'text-caption text-medium-emphasis'},
+                                                'text': f'最后更新: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12},
+                                'content': cards
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
 
     def stop_service(self):
         """
