@@ -23,7 +23,7 @@ class PluginHeatMonitor(_PluginBase):
     plugin_name = "插件热度监控"
     plugin_desc = "监控已安装的下载量热度，支持日历热力图可视化"
     plugin_icon = "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/heatmonitor.png"
-    plugin_version = "1.4"
+    plugin_version = "1.5"
     plugin_author = "DzAvril"
     author_url = "https://github.com/DzAvril"
     plugin_config_prefix = "pluginheatmonitor_"
@@ -561,13 +561,21 @@ class PluginHeatMonitor(_PluginBase):
         return heatmap_data
 
     def _calculate_heatmap_levels(self, heatmap_data: List[List]) -> List[List]:
-        """计算热力图颜色等级"""
+        """计算热力图颜色等级，智能排除历史下载量异常值"""
         if not heatmap_data:
             return []
 
         # 提取所有增量值
         increments = [item[2] for item in heatmap_data]
-        max_increment = max(increments) if increments else 0
+
+        if not increments:
+            return []
+
+        # 智能检测并排除历史下载量异常值
+        filtered_increments = self._filter_historical_outliers(increments)
+
+        # 使用过滤后的数据计算最大值
+        max_increment = max(filtered_increments) if filtered_increments else max(increments)
 
         # 定义5个等级的阈值
         if max_increment == 0:
@@ -595,6 +603,39 @@ class PluginHeatMonitor(_PluginBase):
             result.append([day_index, weekday, level])
 
         return result
+
+    def _filter_historical_outliers(self, increments: List[int]) -> List[int]:
+        """过滤历史下载量异常值，排除第一天可能的历史数据"""
+        if len(increments) <= 1:
+            return increments
+
+        # 计算除第一天外其他天数的统计信息
+        other_days = increments[1:]
+        if not other_days:
+            return increments
+
+        # 计算其他天数的平均值和最大值
+        avg_other_days = sum(other_days) / len(other_days)
+        max_other_days = max(other_days)
+
+        # 如果第一天的值远大于其他天数，则认为是历史数据异常值
+        first_day = increments[0]
+
+        # 判断条件：
+        # 1. 第一天的值大于其他天数平均值的10倍
+        # 2. 第一天的值大于其他天数最大值的5倍
+        # 3. 第一天的值大于1000且大于其他天数平均值的5倍
+        is_historical_outlier = (
+            (avg_other_days > 0 and first_day > avg_other_days * 10) or
+            (max_other_days > 0 and first_day > max_other_days * 5) or
+            (first_day > 1000 and avg_other_days > 0 and first_day > avg_other_days * 5)
+        )
+
+        if is_historical_outlier:
+            logger.info(f"检测到历史下载量异常值：第一天={first_day}，其他天数平均值={avg_other_days:.1f}，最大值={max_other_days}，已排除第一天数据用于颜色深度计算")
+            return other_days
+
+        return increments
 
     @eventmanager.register(EventType.PluginAction)
     def handle_remote_command(self, event: Event):
@@ -1257,12 +1298,15 @@ class PluginHeatMonitor(_PluginBase):
                             all_daily_downloads[date] = 0
                         all_daily_downloads[date] += downloads
 
+            # 智能过滤历史异常值
+            filtered_daily_downloads = self._filter_daily_historical_outliers(all_daily_downloads)
+
             # 生成年份、月份、天数数据
             year_data = {}
             month_data = {}
             day_data = {}
 
-            for date_str, downloads in all_daily_downloads.items():
+            for date_str, downloads in filtered_daily_downloads.items():
                 try:
                     date_obj = datetime.strptime(date_str, "%Y-%m-%d")
                     year = date_obj.year
@@ -1300,6 +1344,43 @@ class PluginHeatMonitor(_PluginBase):
                 "monthData": {},
                 "dayData": {}
             }
+
+    def _filter_daily_historical_outliers(self, daily_downloads: Dict[str, int]) -> Dict[str, int]:
+        """过滤每日下载量中的历史异常值"""
+        if len(daily_downloads) <= 1:
+            return daily_downloads
+
+        # 按日期排序
+        sorted_dates = sorted(daily_downloads.keys())
+        if len(sorted_dates) <= 1:
+            return daily_downloads
+
+        # 获取第一天和其他天数的数据
+        first_date = sorted_dates[0]
+        first_day_downloads = daily_downloads[first_date]
+
+        other_days_downloads = [daily_downloads[date] for date in sorted_dates[1:]]
+
+        if not other_days_downloads:
+            return daily_downloads
+
+        # 计算其他天数的统计信息
+        avg_other_days = sum(other_days_downloads) / len(other_days_downloads)
+        max_other_days = max(other_days_downloads)
+
+        # 判断第一天是否为历史异常值
+        is_historical_outlier = (
+            (avg_other_days > 0 and first_day_downloads > avg_other_days * 10) or
+            (max_other_days > 0 and first_day_downloads > max_other_days * 5) or
+            (first_day_downloads > 1000 and avg_other_days > 0 and first_day_downloads > avg_other_days * 5)
+        )
+
+        if is_historical_outlier:
+            logger.info(f"热力图数据中检测到历史异常值：{first_date}={first_day_downloads}，其他天数平均值={avg_other_days:.1f}，已排除该日期")
+            # 返回排除第一天的数据
+            return {date: downloads for date, downloads in daily_downloads.items() if date != first_date}
+
+        return daily_downloads
 
     def _get_plugin_heatmap(self, plugin_id: str) -> Dict[str, Any]:
         """API Endpoint: 获取指定插件的热力图数据"""
@@ -1341,6 +1422,17 @@ class PluginHeatMonitor(_PluginBase):
                     "message": f"插件 {plugin_name} 暂无历史增量数据，当前总下载量：{current_downloads}"
                 }
 
+            # 先提取非历史数据用于智能过滤
+            non_historical_data = {}
+            for date_str, day_data_item in daily_downloads.items():
+                downloads = self._get_day_value(day_data_item)
+                is_historical = self._is_historical_data(day_data_item)
+                if not is_historical:
+                    non_historical_data[date_str] = downloads
+
+            # 智能过滤历史异常值
+            filtered_non_historical = self._filter_daily_historical_outliers(non_historical_data)
+
             # 生成年度数据
             year_data = {}
             month_data = {}
@@ -1356,22 +1448,28 @@ class PluginHeatMonitor(_PluginBase):
                     downloads = self._get_day_value(day_data_item)
                     is_historical = self._is_historical_data(day_data_item)
 
-                    # 累计年度数据（排除历史数据）
-                    if not is_historical:
+                    # 累计年度数据（排除历史数据和异常值）
+                    if not is_historical and date_str in filtered_non_historical:
                         year_data[year] = year_data.get(year, 0) + downloads
 
-                    # 累计月度数据（排除历史数据）
-                    if not is_historical:
+                    # 累计月度数据（排除历史数据和异常值）
+                    if not is_historical and date_str in filtered_non_historical:
                         month_data[month_key] = month_data.get(month_key, 0) + downloads
 
-                    # 日度数据（包含历史数据标记）
+                    # 日度数据（包含历史数据标记，但标记异常值）
                     if isinstance(day_data_item, dict):
+                        # 如果是被过滤的异常值，添加标记
+                        if not is_historical and date_str not in filtered_non_historical:
+                            day_data_item = day_data_item.copy()
+                            day_data_item["is_outlier"] = True
                         day_data[date_str] = day_data_item
                     else:
                         # 兼容旧格式
+                        is_outlier = not is_historical and date_str not in filtered_non_historical
                         day_data[date_str] = {
                             "value": downloads,
-                            "is_historical": False
+                            "is_historical": is_historical,
+                            "is_outlier": is_outlier
                         }
 
                 except ValueError:

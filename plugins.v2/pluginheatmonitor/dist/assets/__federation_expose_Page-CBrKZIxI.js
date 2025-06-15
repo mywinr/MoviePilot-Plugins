@@ -75,6 +75,13 @@ function isHistoricalData(dayData) {
   return false
 }
 
+function isOutlierData(dayData) {
+  if (typeof dayData === 'object' && dayData !== null) {
+    return dayData.is_outlier || false
+  }
+  return false
+}
+
 // 状态
 const loading = ref$1(false);
 const selectedYear = ref$1(new Date().getFullYear());
@@ -136,11 +143,26 @@ function getHeatmapSquares(pluginData) {
   const current = new Date(firstSunday);
   const dayData = pluginData.dayData;
 
-  // 提取所有数据的值用于计算最大值（包括历史数据，确保颜色等级正确）
-  const allValues = Object.values(dayData)
-    .filter(item => getDayValue(item) > 0)
+  // 智能过滤异常值：排除历史数据和异常值，只使用正常增量数据计算最大值
+  const normalValues = Object.values(dayData)
+    .filter(item => {
+      const value = getDayValue(item);
+      const isHistorical = isHistoricalData(item);
+      const isOutlier = isOutlierData(item);
+      return value > 0 && !isHistorical && !isOutlier
+    })
     .map(item => getDayValue(item));
-  const maxValue = Math.max(...allValues, 1);
+
+  // 如果没有正常数据，则使用所有非历史数据
+  const fallbackValues = Object.values(dayData)
+    .filter(item => {
+      const value = getDayValue(item);
+      const isHistorical = isHistoricalData(item);
+      return value > 0 && !isHistorical
+    })
+    .map(item => getDayValue(item));
+
+  const maxValue = Math.max(...(normalValues.length > 0 ? normalValues : fallbackValues), 1);
 
   // 生成53周 × 7天的网格
   for (let week = 0; week < 53; week++) {
@@ -153,9 +175,19 @@ function getHeatmapSquares(pluginData) {
       const dayDataItem = dayData[dateStr];
       const value = getDayValue(dayDataItem);
       const isHistorical = isHistoricalData(dayDataItem);
+      const isOutlier = isOutlierData(dayDataItem);
 
-      // 计算颜色等级（历史数据和正常数据都使用相同的等级计算）
-      let level = value === 0 ? 0 : Math.min(4, Math.ceil((value / maxValue) * 4));
+      // 计算颜色等级：异常值和历史数据使用特殊处理
+      let level = 0;
+      if (value > 0) {
+        if (isHistorical || isOutlier) {
+          // 历史数据和异常值使用较低的等级，避免影响整体颜色深度
+          level = Math.min(2, Math.ceil((value / maxValue) * 2));
+        } else {
+          // 正常数据使用完整的等级范围
+          level = Math.min(4, Math.ceil((value / maxValue) * 4));
+        }
+      }
 
       squares.push({
         date: new Date(current),
@@ -165,7 +197,8 @@ function getHeatmapSquares(pluginData) {
         week,
         day,
         isInYear: current.getFullYear() === selectedYear.value,
-        isHistorical
+        isHistorical,
+        isOutlier
       });
 
       current.setDate(current.getDate() + 1);
@@ -227,7 +260,8 @@ function getActiveDays(pluginData) {
       const year = new Date(date).getFullYear();
       const value = getDayValue(dayDataItem);
       const isHistorical = isHistoricalData(dayDataItem);
-      return year === selectedYear.value && value > 0 && !isHistorical
+      const isOutlier = isOutlierData(dayDataItem);
+      return year === selectedYear.value && value > 0 && !isHistorical && !isOutlier
     })
     .length
 }
@@ -238,7 +272,8 @@ function getMaxDayContribution(pluginData) {
     .filter(([date, dayDataItem]) => {
       const year = new Date(date).getFullYear();
       const isHistorical = isHistoricalData(dayDataItem);
-      return year === selectedYear.value && !isHistorical
+      const isOutlier = isOutlierData(dayDataItem);
+      return year === selectedYear.value && !isHistorical && !isOutlier
     })
     .map(([, dayDataItem]) => getDayValue(dayDataItem)), 0)
 }
@@ -259,8 +294,8 @@ function getCurrentStreak(pluginData) {
 
     const dayDataItem = pluginData.dayData[dateStr];
 
-    // 检查这一天是否有数据且不是历史数据
-    if (dayDataItem && !isHistoricalData(dayDataItem)) {
+    // 检查这一天是否有数据且不是历史数据或异常值
+    if (dayDataItem && !isHistoricalData(dayDataItem) && !isOutlierData(dayDataItem)) {
       const value = getDayValue(dayDataItem);
       if (value > 0) {
         streak++;
@@ -287,17 +322,22 @@ function getTodayContribution(pluginData) {
                 String(new Date().getMonth() + 1).padStart(2, '0') + '-' +
                 String(new Date().getDate()).padStart(2, '0');
   const todayData = pluginData.dayData[today];
-  // 只返回非历史数据的值
-  if (todayData && !isHistoricalData(todayData)) {
+  // 只返回非历史数据且非异常值的值
+  if (todayData && !isHistoricalData(todayData) && !isOutlierData(todayData)) {
     return getDayValue(todayData)
   }
   return 0
 }
 
 // 方法
-function getSquareClass(level, isHistorical = false) {
+function getSquareClass(level, isHistorical = false, isOutlier = false) {
   const baseClass = `github-level-${level}`;
-  return isHistorical ? `${baseClass} historical-data` : baseClass
+  if (isHistorical) {
+    return `${baseClass} historical-data`
+  } else if (isOutlier) {
+    return `${baseClass} outlier-data`
+  }
+  return baseClass
 }
 
 function getSquareStyle(square) {
@@ -314,10 +354,12 @@ function showTooltip(event, square) {
     day: 'numeric'
   });
 
-  // 根据是否为历史数据显示不同的tooltip文本，并格式化数值
+  // 根据数据类型显示不同的tooltip文本，并格式化数值
   const formattedValue = square.value.toLocaleString();
   if (square.isHistorical) {
     tooltip.content = `${formattedValue} 历史下载量 on ${date}`;
+  } else if (square.isOutlier) {
+    tooltip.content = `${formattedValue} 异常值 (已排除) on ${date}`;
   } else {
     tooltip.content = `${formattedValue} downloads on ${date}`;
   }
@@ -606,7 +648,7 @@ return (_ctx, _cache) => {
                     (_openBlock$1(true), _createElementBlock$1(_Fragment, null, _renderList(getHeatmapSquares(pluginData), (square, index) => {
                       return (_openBlock$1(), _createElementBlock$1("div", {
                         key: index,
-                        class: _normalizeClass(["heatmap-square", getSquareClass(square.level, square.isHistorical)]),
+                        class: _normalizeClass(["heatmap-square", getSquareClass(square.level, square.isHistorical, square.isOutlier)]),
                         style: _normalizeStyle(getSquareStyle(square)),
                         onMouseenter: $event => (showTooltip($event, square)),
                         onMouseleave: hideTooltip,
@@ -807,7 +849,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const GitHubHeatmap = /*#__PURE__*/_export_sfc(_sfc_main$1, [['__scopeId',"data-v-eb58fd60"]]);
+const GitHubHeatmap = /*#__PURE__*/_export_sfc(_sfc_main$1, [['__scopeId',"data-v-3ee011bb"]]);
 
 const {createTextVNode:_createTextVNode,resolveComponent:_resolveComponent,withCtx:_withCtx,createVNode:_createVNode,createElementVNode:_createElementVNode,openBlock:_openBlock,createElementBlock:_createElementBlock,createCommentVNode:_createCommentVNode,toDisplayString:_toDisplayString,createBlock:_createBlock} = await importShared('vue');
 
