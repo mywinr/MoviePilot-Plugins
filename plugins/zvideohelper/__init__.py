@@ -31,7 +31,7 @@ class ZvideoHelper(_PluginBase):
     # 插件图标
     plugin_icon = "zvideo.png"
     # 插件版本
-    plugin_version = "1.6"
+    plugin_version = "1.7"
     # 插件作者
     plugin_author = "DzAvril"
     # 作者主页
@@ -58,8 +58,10 @@ class ZvideoHelper(_PluginBase):
     _douban_score_update_days = 0
     # 定时器
     _scheduler: Optional[BackgroundScheduler] = None
+    _should_stop = False
 
     def init_plugin(self, config: dict = None):
+        self._should_stop = False
         # 停止现有任务
         self.stop_service()
 
@@ -79,7 +81,7 @@ class ZvideoHelper(_PluginBase):
         # 获取历史数据
         self._cached_data = (
             self.get_data("zvideohelper")
-            if self.get_data("zvideohelper") != None
+            if self.get_data("zvideohelper") is not None
             else dict()
         )
         # 加载模块
@@ -249,9 +251,9 @@ class ZvideoHelper(_PluginBase):
             ]
 
     def do_job(self):
+        self._should_stop = False
         if self._sync_douban_status:
             self.sync_douban_status()
-
         if self._use_douban_score:
             self.use_douban_score()
         else:
@@ -260,32 +262,25 @@ class ZvideoHelper(_PluginBase):
     def set_douban_watching(self):
         watching_douban_id = []
         try:
-            # 连接到SQLite数据库
             conn = sqlite3.connect(self._db_path)
-
-            # 创建一个游标对象
             cursor = conn.cursor()
-
-            # 查询表格zvideo_playlist中的collection_id列
             cursor.execute("SELECT collection_id FROM zvideo_playlist")
             collection_ids = cursor.fetchall()
-
-            # 去重collection_id
             collection_ids = set([collection_id[0] for collection_id in collection_ids])
-
-            # 创建一个列表来保存符合条件的meta_info列的JSON对象
             meta_info_list = []
-
-            # 查询zvideo_collection表中对应的行并筛选type == 200的记录，只有电视剧才有在看状态
             for collection_id in collection_ids:
+                if self._should_stop:
+                    logger.info("检测到中断请求，停止同步在看状态...")
+                    break
                 cursor.execute(
                     "SELECT meta_info FROM zvideo_collection WHERE collection_id = ? AND type = 200",
                     (collection_id,),
                 )
                 rows = cursor.fetchall()
-
-                # 将meta_info列的信息转换为JSON对象并保存到列表中
                 for row in rows:
+                    if self._should_stop:
+                        logger.info("检测到中断请求，停止同步在看状态...")
+                        break
                     try:
                         meta_info_json = json.loads(row[0])
                         meta_info_list.append(meta_info_json)
@@ -293,20 +288,22 @@ class ZvideoHelper(_PluginBase):
                         logger.error(
                             f"An error occurred while decoding JSON for collection_id {collection_id}: {e}"
                         )
-
             for meta_info in meta_info_list:
+                if self._should_stop:
+                    logger.info("检测到中断请求，停止同步在看状态...")
+                    break
                 try:
                     douban_id = meta_info["relation"]["douban"]["douban_id"]
                     title = meta_info["title"]
                 except Exception as e:
                     logger.error(f"meta_info: {meta_info}，解析失败: {e}")
                     continue
-                if self._cached_data.get(title) != None:
+                if self._cached_data.get(title) is not None:
                     logger.info(f"已处理过: {title}，跳过...")
                     continue
                 if douban_id == 0:
                     _, douban_id, _ = self.get_douban_info_by_name(title)
-                if douban_id != None:
+                if douban_id is not None:
                     watching_douban_id.append((title, douban_id))
                 else:
                     logger.error(f"未找到豆瓣ID: {title}")
@@ -345,33 +342,27 @@ class ZvideoHelper(_PluginBase):
     def set_douban_done(self):
         watching_douban_id = []
         try:
-            # 连接到SQLite数据库
             conn = sqlite3.connect(self._db_path)
-
-            # 创建一个游标对象
             cursor = conn.cursor()
-
-            # 通过表格`zvideo_collecion_tags`的`tag_name==是否看过`找到对应的`collcetion_id`，在到`zvideo_collection`中查找将其标记为已看
             cursor.execute(
                 "SELECT collection_id FROM zvideo_collection_tags WHERE tag_name='是否看过'"
             )
             collection_ids = cursor.fetchall()
-
-            # 去重collection_id
             collection_ids = set([collection_id[0] for collection_id in collection_ids])
-
-            # 创建一个列表来保存符合条件的meta_info列的JSON对象
             meta_info_list = []
-
             for collection_id in collection_ids:
+                if self._should_stop:
+                    logger.info("检测到中断请求，停止同步已看状态...")
+                    break
                 cursor.execute(
                     "SELECT meta_info FROM zvideo_collection WHERE collection_id = ?",
                     (collection_id,),
                 )
                 rows = cursor.fetchall()
-
-                # 将meta_info列的信息转换为JSON对象并保存到列表中
                 for row in rows:
+                    if self._should_stop:
+                        logger.info("检测到中断请求，停止同步已看状态...")
+                        break
                     try:
                         meta_info_json = json.loads(row[0])
                         meta_info_list.append(meta_info_json)
@@ -379,8 +370,10 @@ class ZvideoHelper(_PluginBase):
                         logger.error(
                             f"An error occurred while decoding JSON for collection_id {collection_id}: {e}"
                         )
-
             for meta_info in meta_info_list:
+                if self._should_stop:
+                    logger.info("检测到中断请求，停止同步已看状态...")
+                    break
                 try:
                     douban_id = meta_info["relation"]["douban"]["douban_id"]
                     title = meta_info["title"]
@@ -392,7 +385,7 @@ class ZvideoHelper(_PluginBase):
                     continue
                 if douban_id == 0:
                     _, douban_id, _ = self.get_douban_info_by_name(title)
-                if douban_id != None:
+                if douban_id is not None:
                     watching_douban_id.append((title, douban_id))
                 else:
                     logger.error(f"未找到豆瓣ID: {title}")
@@ -444,122 +437,102 @@ class ZvideoHelper(_PluginBase):
     def fill_douban_score(self):
         logger.info("获取豆瓣评分...")
         conn = sqlite3.connect(self._db_path)
-        # 使用UTF-8编码处理文本
         conn.text_factory = str
         cursor = conn.cursor()
-
         cursor.execute("SELECT rowid, extend_type, meta_info, updated_at FROM zvideo_collection")
         rows = cursor.fetchall()
         message = ""
         for row in rows:
-            rowid, extend_type, meta_info_json, updated_at = row
-            # 合集，不处理
-            if extend_type == 7:
-                continue
-            meta_info_dict = json.loads(meta_info_json)
-            # 如果meta_info为空，跳过
-            if meta_info_dict.get("douban_score") == None:
-                continue
-                
-            title = meta_info_dict["title"]
-            current_time = datetime.now()
-            need_update = False
-            
-            # 检查是否需要更新评分
+            if self._should_stop:
+                logger.info("检测到中断请求，停止获取豆瓣评分...")
+                break
             try:
-                # 确保douban_score是数值类型
-                douban_score = float(meta_info_dict.get("douban_score", 0))
-            except (TypeError, ValueError):
-                douban_score = 0
-                
-            if douban_score == 0:
-                need_update = True
-                logger.info(f"未找到豆瓣评分，需要更新：{title}")
-            elif updated_at and self._douban_score_update_days > 0:
+                rowid, extend_type, meta_info_json, updated_at = row
+                # 合集，不处理
+                if extend_type == 7:
+                    continue
+                meta_info_dict = json.loads(meta_info_json)
+                # 如果meta_info为空，跳过
+                if meta_info_dict.get("douban_score") is None:
+                    continue
+                title = meta_info_dict["title"]
+                current_time = datetime.now()
+                need_update = False
+                # 检查是否需要更新评分
                 try:
-                    # 处理update_at的时间格式，去掉时区信息
-                    update_at_str = updated_at.split('+')[0]
-                    
-                    # 根据格式选择不同的解析方式
-                    if '.' in update_at_str:
-                        # 处理微秒部分，确保最多6位数字
-                        parts = update_at_str.split('.')
-                        if len(parts) > 1:
-                            # 截取微秒部分最多6位
-                            microseconds = parts[1][:6]
-                            update_at_str = f"{parts[0]}.{microseconds}"
-                        update_time = datetime.strptime(update_at_str, "%Y-%m-%d %H:%M:%S.%f")
-                    else:
-                        # 没有微秒部分的时间格式
-                        update_time = datetime.strptime(update_at_str, "%Y-%m-%d %H:%M:%S")
-                    
-                    time_diff = current_time - update_time
-                    # 检查是否超过更新周期
-                    if time_diff.days >= self._douban_score_update_days:
-                        need_update = True
-                        logger.info(f"豆瓣评分已过期，需要更新：{title}，上次更新时间：{update_at_str}")
-                except Exception as e:
-                    logger.error(f"解析update_at时间失败: {e}, 原始值: {updated_at}")
-                    need_update = True
-            elif not updated_at and self._douban_score_update_days > 0:
-                need_update = True
-                logger.info(f"未找到更新时间，需要更新豆瓣评分：{title}")
-                
-            if need_update:
-                # 记录原来的评分
-                old_score = meta_info_dict.get("douban_score", 0)
-                # 确保转换为浮点数进行比较
-                try:
-                    old_score = float(old_score)
+                    douban_score = float(meta_info_dict.get("douban_score", 0))
                 except (TypeError, ValueError):
-                    old_score = 0
-                
-                _, _, score = self.get_douban_info_by_name(title)
-                if score:
-                    # 确保score也是浮点数
+                    douban_score = 0
+                if douban_score == 0:
+                    need_update = True
+                    logger.info(f"未找到豆瓣评分，需要更新：{title}")
+                elif updated_at and self._douban_score_update_days > 0:
                     try:
-                        score = float(score)
+                        update_at_str = updated_at.split('+')[0]
+                        if '.' in update_at_str:
+                            parts = update_at_str.split('.')
+                            if len(parts) > 1:
+                                microseconds = parts[1][:6]
+                                update_at_str = f"{parts[0]}.{microseconds}"
+                            update_time = datetime.strptime(update_at_str, "%Y-%m-%d %H:%M:%S.%f")
+                        else:
+                            update_time = datetime.strptime(update_at_str, "%Y-%m-%d %H:%M:%S")
+                        time_diff = current_time - update_time
+                        if time_diff.days >= self._douban_score_update_days:
+                            need_update = True
+                            logger.info(f"豆瓣评分已过期，需要更新：{title}，上次更新时间：{update_at_str}")
+                    except Exception as e:
+                        logger.error(f"解析update_at时间失败: {e}, 原始值: {updated_at}")
+                        need_update = True
+                elif not updated_at and self._douban_score_update_days > 0:
+                    need_update = True
+                    logger.info(f"未找到更新时间，需要更新豆瓣评分：{title}")
+                if need_update:
+                    old_score = meta_info_dict.get("douban_score", 0)
+                    try:
+                        old_score = float(old_score)
                     except (TypeError, ValueError):
-                        score = 0
-                        
-                    # 判断评分是否变化
-                    score_changed = old_score > 0 and old_score != score
-                    meta_info_dict["douban_score"] = score
-                    # 更新meta_info
-                    updated_meta_info_json = json.dumps(meta_info_dict, ensure_ascii=False)
-                    # 生成带微秒和时区信息的时间字符串，确保与原格式一致
-                    tz = pytz.timezone(settings.TZ)
-                    current_time = datetime.now(tz)
-                    # 格式化为"2024-01-31 23:25:28.609023+08:00"格式
-                    current_time_str = current_time.strftime("%Y-%m-%d %H:%M:%S.%f") + current_time.strftime("%z")[:3] + ":" + current_time.strftime("%z")[3:]
-                    # 更新meta_info和updated_at
-                    cursor.execute(
-                        "UPDATE zvideo_collection SET meta_info = ?, updated_at = ? WHERE rowid = ?",
-                        (updated_meta_info_json, current_time_str, rowid),
-                    )
-                    conn.commit()
-                    
-                    # 生成包含评分变化的日志和通知信息
-                    if score_changed:
-                        change_direction = "上升" if score > old_score else "下降"
-                        change_amount = abs(score - old_score)
-                        change_msg = f"更新豆瓣评分：{title} {old_score} → {score} ({change_direction}{change_amount:.1f})"
-                        logger.info(change_msg)
-                        message += f"{title} 评分{change_direction}：{old_score} → {score}\n"
-                    elif old_score == 0 and score > 0:
-                        # 首次获取评分
-                        logger.info(f"首次获取豆瓣评分：{title} {score}")
-                        message += f"{title} 获取豆瓣评分：{score}\n"
+                        old_score = 0
+                    try:
+                        _, _, score = self.get_douban_info_by_name(title)
+                    except Exception as e:
+                        logger.error(f"获取豆瓣评分失败: {e}")
+                        score = None
+                    if score:
+                        try:
+                            score = float(score)
+                        except (TypeError, ValueError):
+                            score = 0
+                        score_changed = old_score > 0 and old_score != score
+                        meta_info_dict["douban_score"] = score
+                        updated_meta_info_json = json.dumps(meta_info_dict, ensure_ascii=False)
+                        tz = pytz.timezone(settings.TZ)
+                        current_time = datetime.now(tz)
+                        current_time_str = current_time.strftime("%Y-%m-%d %H:%M:%S.%f") + current_time.strftime("%z")[:3] + ":" + current_time.strftime("%z")[3:]
+                        cursor.execute(
+                            "UPDATE zvideo_collection SET meta_info = ?, updated_at = ? WHERE rowid = ?",
+                            (updated_meta_info_json, current_time_str, rowid),
+                        )
+                        conn.commit()
+                        if score_changed:
+                            change_direction = "上升" if score > old_score else "下降"
+                            change_amount = abs(score - old_score)
+                            change_msg = f"更新豆瓣评分：{title} {old_score} → {score} ({change_direction}{change_amount:.1f})"
+                            logger.info(change_msg)
+                            message += f"{title} 评分{change_direction}：{old_score} → {score}\n"
+                        elif old_score == 0 and score > 0:
+                            logger.info(f"首次获取豆瓣评分：{title} {score}")
+                            message += f"{title} 获取豆瓣评分：{score}\n"
+                        else:
+                            logger.info(f"豆瓣评分未变化：{title} {score}")
                     else:
-                        # 评分未变化，只记录日志不发送通知
-                        logger.info(f"豆瓣评分未变化：{title} {score}")
+                        logger.error(f"未找到豆瓣评分：{title}")
                 else:
-                    logger.error(f"未找到豆瓣评分：{title}")
-            else:
-                logger.info(
-                    f"无需更新豆瓣评分：{title} {meta_info_dict['douban_score']}"
-                )
-                
+                    logger.info(
+                        f"无需更新豆瓣评分：{title} {meta_info_dict['douban_score']}"
+                    )
+            except Exception as e:
+                logger.error(f"处理条目 {row} 时发生异常: {e}")
         if self._notify and len(message) > 0:
             self.post_message(
                 mtype=NotificationType.SiteMessage,
@@ -870,6 +843,7 @@ class ZvideoHelper(_PluginBase):
         """
         退出插件
         """
+        self._should_stop = True
         try:
             if self._scheduler:
                 self._scheduler.remove_all_jobs()
