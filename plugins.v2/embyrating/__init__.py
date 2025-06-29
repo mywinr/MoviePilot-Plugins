@@ -9,7 +9,7 @@ import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from DoubanHelper import DoubanHelper
+from app.plugins.embyrating.DoubanHelper import *
 
 from app.core.config import settings
 from app.core.event import eventmanager, Event
