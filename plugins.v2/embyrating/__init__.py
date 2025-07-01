@@ -30,7 +30,7 @@ class EmbyRating(_PluginBase):
     # 插件图标
     plugin_icon = ("https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/emby_rating.png")
     # 插件版本
-    plugin_version = "1.1"
+    plugin_version = "1.2"
     # 插件作者
     plugin_author = "DzAvril"
     # 作者主页
@@ -45,6 +45,11 @@ class EmbyRating(_PluginBase):
     # 日志标签
     LOG_TAG = "[EmbyRating]"
 
+    # 支持的媒体文件扩展名
+    MEDIA_EXTENSIONS = {'.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.strm'}
+
+
+
     # 私有属性
     _enabled = False
     _cron = None
@@ -53,7 +58,7 @@ class EmbyRating(_PluginBase):
     _rating_source = "tmdb"  # tmdb 或 douban
     _update_interval = 7  # 豆瓣评分更新间隔（天）
     _auto_scrape = True  # 是否自动刮削
-    _cache_enabled = True  # 是否启用缓存
+    _cache_enabled = True  # 缓存功能默认开启
     _media_dirs = ""  # 媒体目录，多个用逗号分隔
     _refresh_library = True  # 是否在更新NFO后刷新媒体库
     _douban_cookie = ""  # 豆瓣cookie配置
@@ -66,6 +71,10 @@ class EmbyRating(_PluginBase):
 
     # 处理结果收集器，用于批量通知
     _processing_results: List[Dict] = []
+    # 失败结果收集器
+    _failed_results: List[Dict] = []
+    # 跳过结果收集器
+    _skipped_results: List[Dict] = []
 
     # 停止标志，用于中断长时间运行的任务
     _should_stop = False
@@ -83,7 +92,8 @@ class EmbyRating(_PluginBase):
             self._rating_source = config.get("rating_source", "tmdb")
             self._update_interval = config.get("update_interval", 7)
             self._auto_scrape = config.get("auto_scrape", True)
-            self._cache_enabled = config.get("cache_enabled", True)
+            # 缓存功能默认开启，不再从配置读取
+            self._cache_enabled = True
             self._media_dirs = config.get("media_dirs", "")
             self._refresh_library = config.get("refresh_library", True)
             self._douban_cookie = config.get("douban_cookie", "")
@@ -94,6 +104,8 @@ class EmbyRating(_PluginBase):
 
         # 初始化处理结果收集器
         self._processing_results = []
+        self._failed_results = []
+        self._skipped_results = []
 
         if self._enabled:
             # 启动定时任务
@@ -138,7 +150,7 @@ class EmbyRating(_PluginBase):
             "rating_source": self._rating_source,
             "update_interval": self._update_interval,
             "auto_scrape": self._auto_scrape,
-            "cache_enabled": self._cache_enabled,
+            # cache_enabled 已移除，默认开启
             "media_dirs": self._media_dirs,
             "refresh_library": self._refresh_library,
             "douban_cookie": self._douban_cookie
@@ -204,6 +216,8 @@ class EmbyRating(_PluginBase):
         if media_type:
             key_parts.append(media_type.value)
         return "|".join(key_parts)
+
+
 
     def get_tmdb_rating_from_nfo(self, nfo_path: Path) -> Optional[float]:
         """从NFO文件中获取TMDB评分"""
@@ -295,17 +309,17 @@ class EmbyRating(_PluginBase):
                 except ValueError:
                     pass
 
-            # 如果传统rating标签没有，尝试从其他地方获取
-            if current_rating is None:
-                # 这里可以添加其他获取评分的逻辑
-                logger.warning(
-                    f"{self.LOG_TAG} 无法获取当前评分，跳过备份: {nfo_path}")
-                return
-
             # 保存TMDB评分到EmbyRating标签
             if tmdb_elem is None:
                 tmdb_elem = ET.SubElement(emby_rating_elem, "tmdb")
-            tmdb_elem.text = str(current_rating)
+
+            # 如果没有找到评分，记录为"none"，表示原本就没有评分
+            if current_rating is None:
+                tmdb_elem.text = "none"
+                logger.info(f"{self.LOG_TAG} 原NFO文件无评分，备份为none: {nfo_path}")
+            else:
+                tmdb_elem.text = str(current_rating)
+                logger.info(f"{self.LOG_TAG} 备份TMDB评分: {media_key} = {current_rating}")
 
             # 添加更新时间
             update_elem = emby_rating_elem.find("update")
@@ -318,9 +332,7 @@ class EmbyRating(_PluginBase):
                 xml_str = self.format_xml(root)
                 with open(nfo_path, 'w', encoding='utf-8') as f:
                     f.write(xml_str)
-                logger.info(
-                    f"{self.LOG_TAG} 备份TMDB评分成功: "
-                    f"{media_key} = {current_rating}")
+                logger.debug(f"{self.LOG_TAG} 备份操作完成: {nfo_path}")
             except Exception as e:
                 logger.error(
                     f"{self.LOG_TAG} 保存NFO文件失败: {nfo_path}, "
@@ -346,11 +358,14 @@ class EmbyRating(_PluginBase):
                             f"{self.LOG_TAG} 使用缓存豆瓣评分: "
                             f"{title} = {cache_data['rating']}")
                         return cache_data["rating"]
-            logger.debug(f"title : {title}")
-            _, subject_id, score = self._douban_helper.get_subject_id(title)
+
+            logger.debug(f"{self.LOG_TAG} 开始搜索豆瓣评分: {title}")
+            found_title, subject_id, score = self._douban_helper.get_subject_id(title)
 
             if subject_id and score and score != "0":
                 rating = float(score)
+
+                logger.debug(f"{self.LOG_TAG} 豆瓣搜索结果: 标题='{found_title}', ID={subject_id}, 评分={score}")
 
                 # 更新缓存
                 if self._cache_enabled:
@@ -362,15 +377,18 @@ class EmbyRating(_PluginBase):
                     }
 
                 logger.info(
-                    f"{self.LOG_TAG} 获取豆瓣评分成功: {title} = {rating}")
+                    f"{self.LOG_TAG} 获取豆瓣评分成功: {title} = {rating} (找到: {found_title})")
                 return rating
             else:
+                logger.debug(f"{self.LOG_TAG} 豆瓣搜索无结果: 标题='{found_title}', ID={subject_id}, 评分={score}")
                 logger.warning(f"{self.LOG_TAG} 未找到豆瓣评分: {title}")
                 return None
 
         except Exception as e:
             logger.error(
                 f"{self.LOG_TAG} 获取豆瓣评分失败 {title}: {str(e)}")
+            import traceback
+            logger.debug(f"{self.LOG_TAG} 详细错误信息: {traceback.format_exc()}")
             return None
 
     def format_xml(self, root) -> str:
@@ -407,15 +425,104 @@ class EmbyRating(_PluginBase):
             # 如果格式化失败，使用简单的tostring
             return ET.tostring(root, encoding='unicode', xml_declaration=True)
 
+    def should_skip_rating_update(self, nfo_path: Path, rating_source: str) -> bool:
+        """检查是否应该跳过评分更新（跳过逻辑）"""
+        try:
+            # TMDB评分不需要检查更新时间，因为它是静态数据
+            if rating_source == "tmdb":
+                return False
+
+            # 只对豆瓣评分进行更新时间检查
+            if rating_source != "douban":
+                return False
+
+            # 读取NFO文件
+            try:
+                with open(nfo_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+            except UnicodeDecodeError:
+                try:
+                    with open(nfo_path, 'r', encoding='gbk') as f:
+                        content = f.read()
+                except UnicodeDecodeError:
+                    return False
+
+            # 解析XML
+            try:
+                root = ET.fromstring(content)
+            except ET.ParseError:
+                return False
+
+            # 查找EmbyRating标签
+            emby_rating_elem = root.find("EmbyRating")
+            if emby_rating_elem is None:
+                return False
+
+            # 检查当前评分源
+            current_source_elem = emby_rating_elem.find("rating_source")
+            if current_source_elem is None or current_source_elem.text != rating_source:
+                return False
+
+            # 检查更新时间
+            update_elem = emby_rating_elem.find("update")
+            if update_elem is None or not update_elem.text:
+                return False
+
+            try:
+                last_update = datetime.strptime(update_elem.text, "%Y-%m-%d")
+                days_since_update = (datetime.now() - last_update).days
+
+                if days_since_update < self._update_interval:
+                    logger.debug(
+                        f"{self.LOG_TAG} 跳过更新，距离上次更新仅{days_since_update}天 "
+                        f"(间隔设置: {self._update_interval}天): {nfo_path}"
+                    )
+                    return True
+            except ValueError:
+                # 如果日期格式不正确，不跳过更新
+                return False
+
+            return False
+
+        except Exception as e:
+            logger.debug(f"{self.LOG_TAG} 检查跳过逻辑时出错: {str(e)}")
+            return False
+
     def update_nfo_rating(self, nfo_path: Path, new_rating: float,
-                          rating_source: str = "douban"):
-        """更新NFO文件中的评分"""
+                          rating_source: str = "douban", title: str = None,
+                          media_type: str = None):
+        """更新NFO文件中的评分（包含跳过检查）"""
         try:
             logger.debug(
                 f"{self.LOG_TAG} 开始更新NFO评分: {nfo_path} = "
                 f"{new_rating} ({rating_source})"
             )
 
+            # 跳过逻辑检查
+            if self.should_skip_rating_update(nfo_path, rating_source):
+                logger.info(f"{self.LOG_TAG} 跳过评分更新: {nfo_path}")
+                # 记录跳过的结果
+                if title and media_type:
+                    self._skipped_results.append({
+                        'title': title,
+                        'reason': '距离上次更新时间过短',
+                        'media_type': media_type
+                    })
+                return True
+
+            # 调用直接更新方法
+            return self._update_nfo_rating_direct(nfo_path, new_rating, rating_source)
+
+        except Exception as e:
+            logger.error(f"{self.LOG_TAG} 更新NFO评分失败 {nfo_path}: {str(e)}")
+            import traceback
+            logger.debug(f"{self.LOG_TAG} 详细错误信息: {traceback.format_exc()}")
+            return False
+
+    def _update_nfo_rating_direct(self, nfo_path: Path, new_rating: float,
+                                 rating_source: str = "douban"):
+        """直接更新NFO文件中的评分（不进行跳过检查）"""
+        try:
             # 读取原始文件内容
             try:
                 with open(nfo_path, 'r', encoding='utf-8') as f:
@@ -451,6 +558,12 @@ class EmbyRating(_PluginBase):
             if rating_elem is None:
                 rating_elem = ET.SubElement(emby_rating_elem, rating_source)
             rating_elem.text = str(new_rating)
+
+            # 添加或更新rating_source字段
+            rating_source_elem = emby_rating_elem.find("rating_source")
+            if rating_source_elem is None:
+                rating_source_elem = ET.SubElement(emby_rating_elem, "rating_source")
+            rating_source_elem.text = rating_source
 
             # 更新传统rating标签（保持兼容性）
             traditional_rating_elem = root.find("rating")
@@ -507,7 +620,7 @@ class EmbyRating(_PluginBase):
                 continue
             if "#" in dir_config:
                 # 解析路径和媒体服务器名称
-                path_part, server_part = dir_config.split("#", 1)
+                _, server_part = dir_config.split("#", 1)
                 server_name = server_part.strip()
                 if server_name:
                     servers.add(server_name)
@@ -591,6 +704,8 @@ class EmbyRating(_PluginBase):
 
         # 初始化处理结果收集器
         self._processing_results = []
+        self._failed_results = []
+        self._skipped_results = []
 
         # 获取媒体目录列表
         media_dirs = []
@@ -601,7 +716,7 @@ class EmbyRating(_PluginBase):
                     continue
                 if "#" in dir_config:
                     # 解析路径和媒体服务器名称
-                    path_part, server_part = dir_config.split("#", 1)
+                    path_part, _ = dir_config.split("#", 1)
                     media_dir = Path(path_part.strip())
                 else:
                     # 没有指定媒体服务器，只使用路径
@@ -650,16 +765,22 @@ class EmbyRating(_PluginBase):
         logger.info(f"{self.LOG_TAG} 评分更新完成")
 
     def _send_batch_notification(self):
-        """发送总结性通知"""
-        if not self._notify or not self._processing_results:
+        """发送汇总通知"""
+        if not self._notify:
             return
 
         try:
             # 统计处理结果
-            total_count = len(self._processing_results)
-            success_count = total_count  # 所有添加到结果列表的都是成功的
+            success_count = len(self._processing_results)
+            failed_count = len(self._failed_results)
+            skipped_count = len(self._skipped_results)
+            total_count = success_count + failed_count + skipped_count
 
-            # 按评分源统计
+            # 如果没有任何处理结果，不发送通知
+            if total_count == 0:
+                return
+
+            # 按评分源统计成功的更新
             douban_count = sum(
                 1 for result in self._processing_results
                 if result['source'] == 'douban'
@@ -669,7 +790,7 @@ class EmbyRating(_PluginBase):
                 if result['source'] == 'tmdb'
             )
 
-            # 按媒体类型统计
+            # 按媒体类型统计成功的更新
             movie_count = sum(
                 1 for result in self._processing_results
                 if result['media_type'] == 'MOVIE'
@@ -679,39 +800,95 @@ class EmbyRating(_PluginBase):
                 if result['media_type'] == 'TV'
             )
 
-            if total_count == 0:
-                return
+            # 按媒体类型统计失败的更新
+            failed_movie_count = sum(
+                1 for result in self._failed_results
+                if result['media_type'] == 'MOVIE'
+            )
+            failed_tv_count = sum(
+                1 for result in self._failed_results
+                if result['media_type'] == 'TV'
+            )
 
-            # 构建通知标题和内容
-            if douban_count > 0 and tmdb_count > 0:
-                # 混合评分源
+            # 按媒体类型统计跳过的更新
+            skipped_movie_count = sum(
+                1 for result in self._skipped_results
+                if result['media_type'] == 'MOVIE'
+            )
+            skipped_tv_count = sum(
+                1 for result in self._skipped_results
+                if result['media_type'] == 'TV'
+            )
+
+            # 构建通知标题
+            if failed_count == 0:
                 title = "🎬 评分更新完成"
-                rating_info = f"豆瓣评分 {douban_count} 部，TMDB评分 {tmdb_count} 部"
-            elif douban_count > 0:
-                # 仅豆瓣评分
-                title = "🎬 豆瓣评分更新完成"
-                rating_info = "已成功切换到豆瓣评分"
-            elif tmdb_count > 0:
-                # 仅TMDB评分
-                title = "🎬 TMDB评分恢复完成"
-                rating_info = "已成功恢复TMDB评分"
             else:
-                return
+                title = "🎬 评分更新完成（部分失败）"
 
-            # 构建媒体类型信息
-            media_info_parts = []
-            if movie_count > 0:
-                media_info_parts.append(f"🎥 电影 {movie_count} 部")
-            if tv_count > 0:
-                media_info_parts.append(f"📺 电视剧 {tv_count} 部")
+            # 构建通知内容
+            text_parts = []
 
-            media_info = (" | ".join(media_info_parts) if media_info_parts
-                          else f"共 {total_count} 部")
+            # 总体统计
+            total_movie_count = movie_count + failed_movie_count + skipped_movie_count
+            total_tv_count = tv_count + failed_tv_count + skipped_tv_count
 
-            # 构建完整通知内容
-            text_parts = [rating_info, f"✅ 成功更新：{success_count} 部"]
-            if media_info:
-                text_parts.append(media_info)
+            if total_movie_count > 0 and total_tv_count > 0:
+                text_parts.append(f"📊 共处理 {total_count} 部影片（🎥 电影 {total_movie_count} 部，📺 电视剧 {total_tv_count} 部）")
+            elif total_movie_count > 0:
+                text_parts.append(f"📊 共处理 {total_count} 部电影")
+            elif total_tv_count > 0:
+                text_parts.append(f"📊 共处理 {total_count} 部电视剧")
+            else:
+                text_parts.append(f"📊 共处理 {total_count} 部影片")
+
+            if success_count > 0:
+                # 成功统计 - 按媒体类型显示
+                success_parts = []
+                if movie_count > 0:
+                    success_parts.append(f"🎥 电影 {movie_count} 部")
+                if tv_count > 0:
+                    success_parts.append(f"📺 电视剧 {tv_count} 部")
+
+                if success_parts:
+                    text_parts.append(f"✅ 成功更新：{' | '.join(success_parts)}")
+                else:
+                    text_parts.append(f"✅ 成功更新 {success_count} 部")
+
+                # 按评分源分类显示
+                source_parts = []
+                if douban_count > 0:
+                    source_parts.append(f"豆瓣 {douban_count} 部")
+                if tmdb_count > 0:
+                    source_parts.append(f"TMDB {tmdb_count} 部")
+                if source_parts:
+                    text_parts.append(f"📈 评分源：{' | '.join(source_parts)}")
+
+            if failed_count > 0:
+                # 失败统计 - 按媒体类型显示
+                failed_parts = []
+                if failed_movie_count > 0:
+                    failed_parts.append(f"🎥 电影 {failed_movie_count} 部")
+                if failed_tv_count > 0:
+                    failed_parts.append(f"📺 电视剧 {failed_tv_count} 部")
+
+                if failed_parts:
+                    text_parts.append(f"❌ 失败：{' | '.join(failed_parts)}")
+                else:
+                    text_parts.append(f"❌ 失败 {failed_count} 部")
+
+            if skipped_count > 0:
+                # 跳过统计 - 按媒体类型显示
+                skipped_parts = []
+                if skipped_movie_count > 0:
+                    skipped_parts.append(f"🎥 电影 {skipped_movie_count} 部")
+                if skipped_tv_count > 0:
+                    skipped_parts.append(f"📺 电视剧 {skipped_tv_count} 部")
+
+                if skipped_parts:
+                    text_parts.append(f"⏭️ 跳过：{' | '.join(skipped_parts)}")
+                else:
+                    text_parts.append(f"⏭️ 跳过 {skipped_count} 部")
 
             text = "\n".join(text_parts)
 
@@ -722,10 +899,17 @@ class EmbyRating(_PluginBase):
                 text=text
             )
 
-            logger.info(f"{self.LOG_TAG} 发送总结通知：{title} - {text}")
+            logger.info(f"{self.LOG_TAG} 发送汇总通知：{title}")
+            logger.debug(f"{self.LOG_TAG} 通知内容：{text}")
 
         except Exception as e:
             logger.error(f"{self.LOG_TAG} 发送批量通知失败：{str(e)}")
+
+        finally:
+            # 清空处理结果列表
+            self._processing_results.clear()
+            self._failed_results.clear()
+            self._skipped_results.clear()
 
     @staticmethod
     def get_command() -> List[Dict[str, Any]]:
@@ -895,6 +1079,31 @@ class EmbyRating(_PluginBase):
                             {
                                 'component': 'VCol',
                                 'props': {
+                                    'cols': 12
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VAlert',
+                                        'props': {
+                                            'type': 'info',
+                                            'variant': 'tonal',
+                                            'text': ('📖 插件工作机制说明：\n'
+                                                   '• 插件通过修改NFO文件中的rating字段来更新媒体评分\n'
+                                                   '• 对于电影：直接更新电影NFO文件的评分信息\n'
+                                                   '• 对于电视剧：整体评分（tvshow.nfo）使用第一季的评分\n'
+                                                   '• 支持豆瓣评分和TMDB评分之间的智能切换')
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
                                     'cols': 12,
                                     'md': 6
                                 },
@@ -991,22 +1200,7 @@ class EmbyRating(_PluginBase):
                                     }
                                 ]
                             },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 6
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'cache_enabled',
-                                            'label': '启用缓存',
-                                        }
-                                    }
-                                ]
-                            }
+
                         ]
                     },
                     {
@@ -1047,7 +1241,7 @@ class EmbyRating(_PluginBase):
                                             'rows': 3,
                                             'placeholder': ('例如：\n'
                                                           '/sata/影视/电影#Emby\n'
-                                                          '/sata/影视/电视剧#Jellyfin\n'
+                                                          '/sata/影视/电视剧#Emby\n'
                                                           '格式：媒体库根目录#媒体服务器名称')
                                         }
                                     }
@@ -1088,7 +1282,7 @@ class EmbyRating(_PluginBase):
                                 },
                                 'content': [
                                     {
-                                        'component': 'VTextField',
+                                        'component': 'VCronField',
                                         'props': {
                                             'model': 'cron',
                                             'label': '定时任务',
@@ -1125,7 +1319,7 @@ class EmbyRating(_PluginBase):
             "rating_source": "tmdb",
             "update_interval": 7,
             "auto_scrape": True,
-            "cache_enabled": True,
+
             "media_dirs": "",
             "refresh_library": True,
             "douban_cookie": ""
@@ -1161,28 +1355,46 @@ class EmbyRating(_PluginBase):
             # 收集所有需要处理的NFO文件
             processed_shows = set()  # 记录已处理的电视剧，避免重复处理
 
+            # 统计目录中的文件
+            total_files = 0
+            media_files = 0
+            nfo_files = 0
+
             # 遍历目录查找媒体文件
             for item in media_dir.rglob("*"):
                 if self._should_stop:
                     logger.info(f"{self.LOG_TAG} 检测到停止信号，中断媒体目录处理")
                     break
 
-                if item.is_file() and item.suffix.lower() in [
-                    '.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm'
-                ]:
+                if item.is_file():
+                    total_files += 1
+                    if item.suffix.lower() == '.nfo':
+                        nfo_files += 1
+                    elif item.suffix.lower() in self.MEDIA_EXTENSIONS:
+                        media_files += 1
+
+                if item.is_file() and item.suffix.lower() in self.MEDIA_EXTENSIONS:
+                    logger.debug(f"{self.LOG_TAG} 发现媒体文件: {item}")
                     # 检查是否为电视剧结构
                     if self._is_tv_show_structure(item):
+                        logger.debug(f"{self.LOG_TAG} 识别为电视剧结构: {item}")
                         # 处理电视剧
                         show_root = self._get_tv_show_root(item)
                         if show_root and show_root not in processed_shows:
+                            logger.info(f"{self.LOG_TAG} 开始处理电视剧: {show_root}")
                             processed_shows.add(show_root)
                             self._process_tv_show(show_root)
+                        elif show_root in processed_shows:
+                            logger.debug(f"{self.LOG_TAG} 电视剧已处理，跳过: {show_root}")
                     else:
+                        logger.debug(f"{self.LOG_TAG} 识别为电影: {item}")
                         # 处理电影
                         nfo_path = item.with_suffix('.nfo')
                         if not nfo_path.exists():
-                            # 尝试刮削
-                            if not self.scrape_media_if_needed(item.parent):
+                            logger.debug(f"{self.LOG_TAG} NFO文件不存在，尝试刮削: {nfo_path}")
+                            # 尝试刮削，传递目标媒体文件
+                            if not self.scrape_media_if_needed(item.parent, False, item):
+                                logger.debug(f"{self.LOG_TAG} 刮削失败或跳过: {item}")
                                 continue
                             # 重新检查NFO文件
                             if not nfo_path.exists():
@@ -1192,6 +1404,13 @@ class EmbyRating(_PluginBase):
                                 continue
                         # 处理NFO文件
                         self.process_nfo_file(nfo_path)
+
+            # 输出统计信息
+            logger.info(f"{self.LOG_TAG} 目录统计 - 总文件: {total_files}, 媒体文件: {media_files}, NFO文件: {nfo_files}")
+            if media_files == 0:
+                logger.warning(f"{self.LOG_TAG} 目录中未找到任何媒体文件: {media_dir}")
+            if nfo_files == 0:
+                logger.warning(f"{self.LOG_TAG} 目录中未找到任何NFO文件: {media_dir}")
 
         except Exception as e:
             logger.error(f"{self.LOG_TAG} 处理媒体目录失败 {media_dir}: {str(e)}")
@@ -1226,14 +1445,14 @@ class EmbyRating(_PluginBase):
             return None
 
     def _process_tv_show(self, show_root: Path):
-        """处理电视剧，只更新tvshow.nfo文件"""
+        """处理电视剧，更新tvshow.nfo文件评分"""
         try:
             tvshow_nfo = show_root / "tvshow.nfo"
-            
+
             # 如果tvshow.nfo不存在，尝试刮削
             if not tvshow_nfo.exists():
                 logger.info(f"{self.LOG_TAG} 未找到tvshow.nfo文件，尝试刮削: {show_root}")
-                
+
                 # 检查是否为电视剧目录（包含季目录结构）
                 if self._is_tv_show_directory(show_root):
                     # 尝试刮削
@@ -1249,25 +1468,56 @@ class EmbyRating(_PluginBase):
                     logger.warning(f"{self.LOG_TAG} 目录结构不符合电视剧格式，跳过: {show_root}")
                     return
 
-            # 获取第一季的豆瓣评分作为整个剧集的评分
-            first_season_rating = self._get_first_season_rating(show_root)
-            if not first_season_rating:
-                logger.warning(f"{self.LOG_TAG} 无法获取第1季评分: {show_root}")
-                return
-
-            # 直接更新tvshow.nfo文件，避免重复处理
-            if self.update_nfo_rating(tvshow_nfo, first_season_rating, "douban"):
-                # 添加到处理结果
-                self._processing_results.append({
+            # 先检查是否可以跳过更新
+            if self.should_skip_rating_update(tvshow_nfo, self._rating_source):
+                logger.info(f"{self.LOG_TAG} 跳过电视剧评分更新: {show_root.name}")
+                # 记录跳过的结果
+                self._skipped_results.append({
                     'title': f"{show_root.name} (电视剧)",
-                    'rating': first_season_rating,
-                    'source': 'douban',
+                    'reason': '距离上次更新时间过短',
                     'media_type': 'TV'
                 })
-                logger.info(f"{self.LOG_TAG} 电视剧评分更新成功: {show_root.name} = {first_season_rating}")
+            else:
+                # 获取第一季的评分作为整个剧集的评分
+                first_season_rating = self._get_first_season_rating(show_root)
+                if not first_season_rating:
+                    logger.warning(f"{self.LOG_TAG} 无法获取剧集评分: {show_root}")
+                    # 添加到失败结果
+                    self._failed_results.append({
+                        'title': f"{show_root.name} (电视剧)",
+                        'reason': '无法获取剧集评分',
+                        'media_type': 'TV'
+                    })
+                    return
+
+                # 更新tvshow.nfo文件（直接更新，跳过内部检查）
+                if self._update_nfo_rating_direct(tvshow_nfo, first_season_rating, self._rating_source):
+                    # 添加到处理结果
+                    self._processing_results.append({
+                        'title': f"{show_root.name} (电视剧)",
+                        'rating': first_season_rating,
+                        'source': self._rating_source,
+                        'media_type': 'TV'
+                    })
+                    logger.info(f"{self.LOG_TAG} 电视剧评分更新成功: {show_root.name} = {first_season_rating}")
+                else:
+                    # 添加到失败结果
+                    self._failed_results.append({
+                        'title': f"{show_root.name} (电视剧)",
+                        'reason': '更新NFO文件失败',
+                        'media_type': 'TV'
+                    })
+
+
 
         except Exception as e:
             logger.error(f"{self.LOG_TAG} 处理电视剧失败 {show_root}: {str(e)}")
+            # 添加到失败结果
+            self._failed_results.append({
+                'title': f"{show_root.name} (电视剧)" if show_root else "未知电视剧",
+                'reason': f'处理异常: {str(e)}',
+                'media_type': 'TV'
+            })
 
     def _is_tv_show_directory(self, directory: Path) -> bool:
         """判断是否为电视剧目录"""
@@ -1289,9 +1539,7 @@ class EmbyRating(_PluginBase):
             # 检查是否直接包含媒体文件（可能是季目录）
             media_files = []
             for item in directory.iterdir():
-                if item.is_file() and item.suffix.lower() in [
-                    '.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm'
-                ]:
+                if item.is_file() and item.suffix.lower() in self.MEDIA_EXTENSIONS:
                     media_files.append(item)
             
             # 如果包含媒体文件但没有季目录，可能是季目录或电影目录
@@ -1308,13 +1556,15 @@ class EmbyRating(_PluginBase):
             return False
 
     def _get_first_season_rating(self, show_root: Path) -> Optional[float]:
-        """获取第一季的豆瓣评分"""
+        """获取剧集评分（优先使用第一季评分）"""
         try:
             # 从tvshow.nfo获取电视剧标题
             tvshow_nfo = show_root / "tvshow.nfo"
             if not tvshow_nfo.exists():
                 logger.warning(f"{self.LOG_TAG} 未找到tvshow.nfo文件: {show_root}")
                 return None
+
+            logger.info(f"{self.LOG_TAG} 开始从tvshow.nfo获取标题: {tvshow_nfo}")
 
             # 读取tvshow.nfo文件
             try:
@@ -1331,82 +1581,129 @@ class EmbyRating(_PluginBase):
             # 解析XML
             try:
                 root = ET.fromstring(content)
+                logger.debug(f"{self.LOG_TAG} XML解析成功，根元素: {root.tag}")
             except ET.ParseError as e:
                 logger.error(f"{self.LOG_TAG} XML解析失败: {tvshow_nfo}, 错误: {str(e)}")
                 return None
 
             # 获取标题
-            title_elem = self.find_elem_ignore_ns(root, "title")
-            logger.debug(f"{self.LOG_TAG} find_elem_ignore_ns返回: {title_elem}")
-            
-            if title_elem is None:
-                logger.warning(f"{self.LOG_TAG} tvshow.nfo中未找到title元素: {tvshow_nfo}")
-                return None
-            
-            # 详细检查title内容
-            logger.debug(f"{self.LOG_TAG} 找到title元素，text内容: {repr(title_elem.text)}")
-            
-            if not title_elem.text or not title_elem.text.strip():
-                logger.warning(f"{self.LOG_TAG} tvshow.nfo中title元素text为空，尝试替代标题元素: {tvshow_nfo}")
-                # 尝试查找其他可能的标题元素
-                alt_title_elem = None
-                for title_tag in ["originaltitle", "sorttitle", "name", "showname"]:
-                    alt_title_elem = self.find_elem_ignore_ns(root, title_tag)
-                    if alt_title_elem is not None and alt_title_elem.text and alt_title_elem.text.strip():
-                        logger.info(f"{self.LOG_TAG} 使用替代标题元素 {title_tag}: {alt_title_elem.text}")
-                        title_elem = alt_title_elem
-                        break
-                
-                if not alt_title_elem or not alt_title_elem.text or not alt_title_elem.text.strip():
-                    logger.warning(f"{self.LOG_TAG} tvshow.nfo中所有标题元素都为空: {tvshow_nfo}")
-                    return None
-
-            base_title = title_elem.text.strip()
+            base_title = self._extract_title_from_tvshow_nfo(root)
             if not base_title:
-                logger.warning(f"{self.LOG_TAG} tvshow.nfo中title内容为空或只包含空白字符: {tvshow_nfo}")
+                logger.warning(f"{self.LOG_TAG} 无法从tvshow.nfo获取标题: {tvshow_nfo}")
                 return None
 
             # 获取年份
-            year_elem = self.find_elem_ignore_ns(root, "year")
-            year = None
-            if year_elem and year_elem.text:
-                try:
-                    year = int(year_elem.text.strip())
-                except ValueError:
-                    pass
+            year = self._extract_year_from_nfo(root)
 
-            logger.info(f"{self.LOG_TAG} 从tvshow.nfo获取标题: {base_title}")
+            logger.info(f"{self.LOG_TAG} 从tvshow.nfo获取标题: {base_title}, 年份: {year}")
 
-            # 首先尝试直接用标题获取评分
-            rating = self.get_douban_rating(base_title, year)
-            if rating:
-                logger.info(f"{self.LOG_TAG} 直接获取评分成功: {base_title} = {rating}")
-                return rating
+            # 根据评分源获取评分
+            if self._rating_source == "douban":
+                # 首先尝试直接用标题获取评分
+                rating = self.get_douban_rating(base_title, year)
+                if rating:
+                    logger.info(f"{self.LOG_TAG} 直接获取豆瓣评分成功: {base_title} = {rating}")
+                    return rating
 
-            # 如果直接获取失败，尝试用"第1季"格式
-            season_title = f"{base_title} 第 1 季"
-            logger.info(f"{self.LOG_TAG} 尝试第1季格式: {season_title}")
-            rating = self.get_douban_rating(season_title, year)
-            if rating:
-                logger.info(f"{self.LOG_TAG} 第1季格式获取评分成功: {season_title} = {rating}")
-                return rating
+                # 如果直接获取失败，尝试用"第一季"格式
+                season_title_formats = [
+                    f"{base_title} 第一季",
+                    f"{base_title} 第 一 季",
+                    f"{base_title} Season 1",
+                    f"{base_title} S1",
+                    f"{base_title} S01"
+                ]
 
-            logger.warning(f"{self.LOG_TAG} 无法获取评分: {base_title}")
+                for season_title in season_title_formats:
+                    logger.info(f"{self.LOG_TAG} 尝试季格式: {season_title}")
+                    rating = self.get_douban_rating(season_title, year)
+                    if rating:
+                        logger.info(f"{self.LOG_TAG} 季格式获取豆瓣评分成功: {season_title} = {rating}")
+                        return rating
+
+                logger.warning(f"{self.LOG_TAG} 无法获取豆瓣评分: {base_title}")
+                return None
+
+            elif self._rating_source == "tmdb":
+                # 对于TMDB评分，尝试从现有NFO文件中获取
+                return self.get_tmdb_rating_from_nfo(tvshow_nfo)
+
+            else:
+                logger.warning(f"{self.LOG_TAG} 未知的评分源: {self._rating_source}")
+                return None
+
+        except Exception as e:
+            logger.error(f"{self.LOG_TAG} 获取剧集评分失败: {str(e)}")
+            import traceback
+            logger.debug(f"{self.LOG_TAG} 详细错误信息: {traceback.format_exc()}")
+            return None
+
+    def _extract_title_from_tvshow_nfo(self, root) -> Optional[str]:
+        """从tvshow.nfo的XML根元素中提取标题"""
+        try:
+            # 尝试多种标题元素
+            title_tags = ["title", "originaltitle", "sorttitle", "name", "showname"]
+
+            for tag_name in title_tags:
+                # 使用简单的查找方法
+                elem = root.find(tag_name)
+                if elem is not None and elem.text and elem.text.strip():
+                    title = elem.text.strip()
+                    logger.info(f"{self.LOG_TAG} 从{tag_name}元素获取标题: {title}")
+                    return title
+
+                # 如果简单查找失败，尝试忽略命名空间的查找
+                for child in root.iter():
+                    if child.tag.lower().endswith(tag_name.lower()) and child.text and child.text.strip():
+                        title = child.text.strip()
+                        logger.info(f"{self.LOG_TAG} 从{child.tag}元素获取标题: {title}")
+                        return title
+
+            logger.warning(f"{self.LOG_TAG} 未找到任何有效的标题元素")
             return None
 
         except Exception as e:
-            logger.error(f"{self.LOG_TAG} 获取第一季评分失败: {str(e)}")
+            logger.error(f"{self.LOG_TAG} 提取标题失败: {str(e)}")
+            return None
+
+    def _extract_year_from_nfo(self, root) -> Optional[int]:
+        """从NFO的XML根元素中提取年份"""
+        try:
+            # 尝试year元素
+            year_elem = root.find("year")
+            if year_elem is not None and year_elem.text:
+                try:
+                    return int(year_elem.text.strip())
+                except ValueError:
+                    pass
+
+            # 如果简单查找失败，尝试忽略命名空间的查找
+            for child in root.iter():
+                if child.tag.lower().endswith("year") and child.text:
+                    try:
+                        return int(child.text.strip())
+                    except ValueError:
+                        pass
+
+            return None
+
+        except Exception as e:
+            logger.error(f"{self.LOG_TAG} 提取年份失败: {str(e)}")
             return None
 
     def find_elem_ignore_ns(self, root, tag_name):
         """在root下查找忽略命名空间和不可见字符的tag_name元素，输出调试信息"""
         found_elements = []
+        logger.debug(f"{self.LOG_TAG} 开始查找元素: {tag_name}")
+
         for elem in root.iter():
             tag = elem.tag
-            if tag.lower().strip().endswith(tag_name):
+            if tag.lower().strip().endswith(tag_name.lower()):
                 found_elements.append(elem)
                 logger.debug(f"{self.LOG_TAG} 命中tag: {repr(tag)}")
-        
+
+        logger.debug(f"{self.LOG_TAG} 查找完成，找到 {len(found_elements)} 个 {tag_name} 元素")
+
         if found_elements:
             # 返回第一个找到的元素
             logger.debug(f"{self.LOG_TAG} 找到 {len(found_elements)} 个 {tag_name} 元素，返回第一个")
@@ -1434,7 +1731,7 @@ class EmbyRating(_PluginBase):
                 logger.warning(f"{self.LOG_TAG} NFO文件为空: {nfo_path}")
                 return
 
-            logger.debug(
+            logger.info(
                 f"{self.LOG_TAG} 开始处理NFO文件: {nfo_path} (大小: {file_size} bytes)")
 
             # 尝试读取文件内容
@@ -1596,43 +1893,89 @@ class EmbyRating(_PluginBase):
 
             # 根据评分源处理
             if self._rating_source == "douban":
-                # 获取豆瓣评分（优先使用override_rating）
-                douban_rating = override_rating or self.get_douban_rating(
-                    title, year)
-                if douban_rating:
-                    # 更新NFO文件
-                    if self.update_nfo_rating(nfo_path, douban_rating, "douban"):
-                        # 添加到处理结果
-                        self._processing_results.append({
+                # 先检查是否可以跳过更新
+                if self.should_skip_rating_update(nfo_path, self._rating_source):
+                    logger.info(f"{self.LOG_TAG} 跳过评分更新: {nfo_path}")
+                    # 记录跳过的结果
+                    self._skipped_results.append({
+                        'title': title,
+                        'reason': '距离上次更新时间过短',
+                        'media_type': media_type.value
+                    })
+                else:
+                    # 获取豆瓣评分（优先使用override_rating）
+                    douban_rating = override_rating or self.get_douban_rating(
+                        title, year)
+                    if douban_rating:
+                        # 更新NFO文件（跳过内部的跳过检查，因为已经检查过了）
+                        if self._update_nfo_rating_direct(nfo_path, douban_rating, "douban"):
+                            # 添加到处理结果
+                            self._processing_results.append({
+                                'title': title,
+                                'rating': douban_rating,
+                                'source': 'douban',
+                                'media_type': media_type.value
+                            })
+                    else:
+                        logger.warning(f"{self.LOG_TAG} 无法获取豆瓣评分: {title}")
+                        # 添加到失败结果
+                        self._failed_results.append({
                             'title': title,
-                            'rating': douban_rating,
-                            'source': 'douban',
+                            'reason': '无法获取豆瓣评分',
                             'media_type': media_type.value
                         })
-                else:
-                    logger.warning(f"{self.LOG_TAG} 无法获取豆瓣评分: {title}")
 
             elif self._rating_source == "tmdb":
                 # 恢复TMDB评分
                 if media_key:
                     restored_rating = self.restore_tmdb_rating(
                         nfo_path, media_key)
-                    if restored_rating:
+                    if restored_rating is not None:
                         # 添加到处理结果
-                        self._processing_results.append({
+                        if restored_rating == 0.0:
+                            # 原本就没有评分，成功删除rating标签
+                            self._processing_results.append({
+                                'title': title,
+                                'rating': '无评分',
+                                'source': 'tmdb',
+                                'media_type': media_type.value
+                            })
+                        else:
+                            # 成功恢复评分
+                            self._processing_results.append({
+                                'title': title,
+                                'rating': restored_rating,
+                                'source': 'tmdb',
+                                'media_type': media_type.value
+                            })
+                    else:
+                        # 添加到失败结果
+                        self._failed_results.append({
                             'title': title,
-                            'rating': restored_rating,
-                            'source': 'tmdb',
+                            'reason': '无法恢复TMDB评分',
                             'media_type': media_type.value
                         })
                 else:
                     logger.warning(f"{self.LOG_TAG} 未找到TMDB评分备份: {title}")
+                    # 添加到失败结果
+                    self._failed_results.append({
+                        'title': title,
+                        'reason': '未找到TMDB评分备份',
+                        'media_type': media_type.value
+                    })
         except Exception as e:
             logger.error(f"{self.LOG_TAG} 处理NFO文件失败 {nfo_path}: {str(e)}")
+            # 添加到失败结果
+            self._failed_results.append({
+                'title': title if 'title' in locals() else str(nfo_path.stem),
+                'reason': f'处理异常: {str(e)}',
+                'media_type': 'UNKNOWN'
+            })
             import traceback
             logger.debug(f"{self.LOG_TAG} 详细错误信息: {traceback.format_exc()}")
 
-    def scrape_media_if_needed(self, media_path: Path, is_tv_show: bool = False) -> bool:
+    def scrape_media_if_needed(self, media_path: Path, is_tv_show: bool = False,
+                               target_media_file: Path = None) -> bool:
         """如果需要则进行刮削"""
         if not self._auto_scrape:
             return True
@@ -1644,24 +1987,31 @@ class EmbyRating(_PluginBase):
                 if tvshow_nfo.exists():
                     logger.debug(f"{self.LOG_TAG} 电视剧目录已存在tvshow.nfo文件: {media_path}")
                     return True
-            else:
-                # 对于其他目录，检查是否存在NFO文件
-                nfo_files = list(media_path.glob("*.nfo"))
-                if nfo_files:
-                    logger.debug(f"{self.LOG_TAG} 目录已存在NFO文件: {media_path}")
+                else:
+                    logger.info(f"{self.LOG_TAG} 电视剧目录缺少tvshow.nfo，开始刮削: {media_path}")
+                    return self._scrape_directory(media_path)
+
+            # 如果指定了目标媒体文件，检查对应的NFO文件
+            if target_media_file:
+                target_nfo = target_media_file.with_suffix('.nfo')
+                if target_nfo.exists():
+                    logger.debug(f"{self.LOG_TAG} NFO文件已存在: {target_nfo}")
                     return True
+                else:
+                    logger.info(f"{self.LOG_TAG} NFO文件不存在，开始刮削: {target_media_file}")
+                    return self._scrape_directory(target_media_file.parent)
 
-            # 检查是否为媒体文件
-            media_extensions = ['.mkv', '.mp4', '.avi',
-                                '.mov', '.wmv', '.flv', '.webm']
-            media_files = [f for f in media_path.iterdir(
-            ) if f.is_file() and f.suffix.lower() in media_extensions]
+            # 默认刮削整个目录
+            return self._scrape_directory(media_path)
 
-            if not media_files:
-                logger.debug(f"{self.LOG_TAG} 目录中没有媒体文件，跳过刮削: {media_path}")
-                return True
+        except Exception as e:
+            logger.error(f"{self.LOG_TAG} 刮削失败 {media_path}: {str(e)}")
+            return False
 
-            logger.info(f"{self.LOG_TAG} 开始刮削媒体: {media_path}")
+    def _scrape_directory(self, media_path: Path) -> bool:
+        """刮削目录"""
+        try:
+            logger.info(f"{self.LOG_TAG} 开始刮削目录: {media_path}")
 
             # 调用MoviePilot的刮削功能
             mediachain = MediaChain()
@@ -1669,7 +2019,7 @@ class EmbyRating(_PluginBase):
             # 创建FileItem
             fileitem = FileItem(
                 path=str(media_path),
-                type="dir" if media_path.is_dir() else "file",
+                type="dir",
                 storage="local"
             )
 
@@ -1681,14 +2031,14 @@ class EmbyRating(_PluginBase):
                 # 执行刮削
                 mediachain.scrape_metadata(
                     fileitem=fileitem, meta=meta, mediainfo=mediainfo, overwrite=True)
-                logger.info(f"{self.LOG_TAG} 刮削完成: {media_path}")
+                logger.info(f"{self.LOG_TAG} 目录刮削完成: {media_path}")
                 return True
             else:
-                logger.warning(f"{self.LOG_TAG} 无法识别媒体信息，跳过刮削: {media_path}")
+                logger.warning(f"{self.LOG_TAG} 无法识别媒体信息: {media_path}")
                 return False
 
         except Exception as e:
-            logger.error(f"{self.LOG_TAG} 刮削失败 {media_path}: {str(e)}")
+            logger.error(f"{self.LOG_TAG} 刮削目录失败 {media_path}: {str(e)}")
             return False
 
     def restore_tmdb_rating(self, nfo_path: Path, media_key: str) -> Optional[float]:
@@ -1725,6 +2075,24 @@ class EmbyRating(_PluginBase):
                 logger.warning(f"{self.LOG_TAG} 未找到TMDB评分备份: {media_key}")
                 return None
 
+            # 检查是否为"none"，表示原本就没有评分
+            if tmdb_elem.text.strip().lower() == "none":
+                logger.info(f"{self.LOG_TAG} 原NFO文件无评分，删除rating标签: {media_key}")
+                # 删除rating标签（如果存在）
+                traditional_rating_elem = root.find("rating")
+                if traditional_rating_elem is not None:
+                    root.remove(traditional_rating_elem)
+                    logger.debug(f"{self.LOG_TAG} 已删除rating标签")
+
+                # 更新rating_source为tmdb
+                rating_source_elem = emby_rating_elem.find("rating_source")
+                if rating_source_elem is None:
+                    rating_source_elem = ET.SubElement(emby_rating_elem, "rating_source")
+                rating_source_elem.text = "tmdb"
+
+                return 0.0  # 返回0表示成功但无评分
+
+            # 尝试解析评分
             try:
                 rating = float(tmdb_elem.text)
             except ValueError:
@@ -1737,8 +2105,11 @@ class EmbyRating(_PluginBase):
                 traditional_rating_elem = ET.SubElement(root, "rating")
             traditional_rating_elem.text = str(rating)
 
-            # 更新EmbyRating标签中的tmdb评分
-            tmdb_elem.text = str(rating)
+            # 更新EmbyRating标签中的rating_source
+            rating_source_elem = emby_rating_elem.find("rating_source")
+            if rating_source_elem is None:
+                rating_source_elem = ET.SubElement(emby_rating_elem, "rating_source")
+            rating_source_elem.text = "tmdb"
 
             # 更新更新时间
             update_elem = emby_rating_elem.find("update")
@@ -1753,8 +2124,10 @@ class EmbyRating(_PluginBase):
                 with open(nfo_path, 'w', encoding='utf-8') as f:
                     f.write(xml_str)
 
-                logger.info(
-                    f"{self.LOG_TAG} 恢复TMDB评分成功: {media_key} = {rating}")
+                if rating == 0.0:
+                    logger.info(f"{self.LOG_TAG} 恢复TMDB状态成功（无评分）: {media_key}")
+                else:
+                    logger.info(f"{self.LOG_TAG} 恢复TMDB评分成功: {media_key} = {rating}")
                 return rating
 
             except Exception as e:
