@@ -66,7 +66,7 @@ class EmbyRating(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/emby_rating.png"
     # 插件版本
-    plugin_version = "1.3"
+    plugin_version = "1.4"
     # 插件作者
     plugin_author = "DzAvril"
     # 作者主页
@@ -1878,10 +1878,9 @@ class EmbyRating(_PluginBase):
                     # 根据媒体类型获取评分
                     if media_type == MediaType.TV:
                         # 电视剧：获取第一季的评分作为整个剧集的评分
-                        show_root = nfo_path.parent
-                        douban_rating = self._get_first_season_rating(show_root)
+                        douban_rating = self._get_first_season_rating(title, year)
                         if not douban_rating:
-                            logger.warning(f"无法获取剧集评分: {show_root}")
+                            logger.warning(f"无法获取剧集评分: {title}")
                             # 添加到失败结果
                             self._failed_results.append({
                                 'title': f"{title} (电视剧)",
