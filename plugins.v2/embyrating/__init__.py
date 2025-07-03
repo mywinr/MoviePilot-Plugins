@@ -1367,8 +1367,8 @@ class EmbyRating(_PluginBase):
         }
 
     def get_page(self) -> List[dict]:
-        """拼装插件详情页面（已废弃，保留兼容性）"""
-        return []
+        """拼装插件详情页面"""
+        return None
 
     def stop_service(self):
         """停止插件"""
