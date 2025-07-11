@@ -130,5 +130,18 @@
             "v1.1": "优化",
             "v1.0": "新建"
         }
+    },
+    "UserDownloadPath": {
+        "name": "下载路径修改",
+        "description": "为不同用户设置不同的下载路径",
+        "labels": "下载",
+        "version": "1.0",
+        "icon": "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/userdownloadpath.png",
+        "author": "DzAvril",
+        "level": 1,
+        "v2": true,
+        "history": {
+            "v1.0": "新建"
+        }
     }
 }
