@@ -70,6 +70,7 @@ class ISiteUserInfo(metaclass=ABCMeta):
             "听听歌": ["TTG", "WiKi", "DoA", "NGB", "ARiN"],
             "馒头": ["MTeam", "MTeamTV"],
             "朋友": ["FRDS"],
+            "织梦": ["ZmWeb", "ZmAudio", "ZmPT", "ZmMusic"],
         }
 
         # 错误信息
