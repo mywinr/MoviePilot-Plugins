@@ -12,7 +12,7 @@
     <v-form>
       <!-- 基础开关配置 -->
       <v-row>
-        <v-col cols="12" md="4">
+        <v-col cols="12" md="3">
           <v-switch
             v-model="config.enabled"
             label="启用插件"
@@ -21,16 +21,25 @@
             persistent-hint
           />
         </v-col>
-        <v-col cols="12" md="4">
+        <v-col cols="12" md="3">
           <v-switch
             v-model="config.enable_notification"
-            label="启用通知"
+            label="启用通知1"
             color="primary"
             hint="开启后达到增量时发送通知"
             persistent-hint
           />
         </v-col>
-        <v-col cols="12" md="4">
+        <v-col cols="12" md="3">
+          <v-switch
+            v-model="config.enable_mcp"
+            label="启用MCP工具"
+            color="primary"
+            hint="是否向MCP Server插件注册工具"
+            persistent-hint
+          />
+        </v-col>
+        <v-col cols="12" md="3">
           <v-btn
             color="warning"
             variant="outlined"
@@ -145,6 +154,7 @@ const emit = defineEmits(['switch', 'close', 'save'])
 const config = reactive({
   enabled: false,
   enable_notification: true,
+  enable_mcp: true,
   cron: '0 8 * * *',
   download_increment: 100,
   monitored_plugins: []
@@ -211,6 +221,7 @@ async function saveConfig() {
     const configPayload = {
       enabled: config.enabled,
       enable_notification: config.enable_notification,
+      enable_mcp: config.enable_mcp,
       cron: config.cron,
       download_increment: config.download_increment,
       selected_plugins: config.monitored_plugins, // 前端用monitored_plugins，后端期望selected_plugins

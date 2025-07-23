@@ -25,6 +25,7 @@ const emit = __emit;
 const config = reactive({
   enabled: false,
   enable_notification: true,
+  enable_mcp: true,
   cron: '0 8 * * *',
   download_increment: 100,
   monitored_plugins: []
@@ -91,6 +92,7 @@ async function saveConfig() {
     const configPayload = {
       enabled: config.enabled,
       enable_notification: config.enable_notification,
+      enable_mcp: config.enable_mcp,
       cron: config.cron,
       download_increment: config.download_increment,
       selected_plugins: config.monitored_plugins, // 前端用monitored_plugins，后端期望selected_plugins
@@ -160,11 +162,11 @@ return (_ctx, _cache) => {
         variant: "tonal",
         class: "mb-4"
       }, {
-        default: _withCtx(() => _cache[6] || (_cache[6] = [
+        default: _withCtx(() => _cache[7] || (_cache[7] = [
           _createTextVNode(" 💡 使用提示：选择要监控的插件并设置下载增量，当插件下载量增长达到设定值时会发送通知。支持监控包括本插件在内的所有已安装插件。 ")
         ])),
         _: 1,
-        __: [6]
+        __: [7]
       }),
       _createVNode(_component_v_form, null, {
         default: _withCtx(() => [
@@ -172,7 +174,7 @@ return (_ctx, _cache) => {
             default: _withCtx(() => [
               _createVNode(_component_v_col, {
                 cols: "12",
-                md: "4"
+                md: "3"
               }, {
                 default: _withCtx(() => [
                   _createVNode(_component_v_switch, {
@@ -188,13 +190,13 @@ return (_ctx, _cache) => {
               }),
               _createVNode(_component_v_col, {
                 cols: "12",
-                md: "4"
+                md: "3"
               }, {
                 default: _withCtx(() => [
                   _createVNode(_component_v_switch, {
                     modelValue: config.enable_notification,
                     "onUpdate:modelValue": _cache[1] || (_cache[1] = $event => ((config.enable_notification) = $event)),
-                    label: "启用通知",
+                    label: "启用通知1",
                     color: "primary",
                     hint: "开启后达到增量时发送通知",
                     "persistent-hint": ""
@@ -204,7 +206,23 @@ return (_ctx, _cache) => {
               }),
               _createVNode(_component_v_col, {
                 cols: "12",
-                md: "4"
+                md: "3"
+              }, {
+                default: _withCtx(() => [
+                  _createVNode(_component_v_switch, {
+                    modelValue: config.enable_mcp,
+                    "onUpdate:modelValue": _cache[2] || (_cache[2] = $event => ((config.enable_mcp) = $event)),
+                    label: "启用MCP工具",
+                    color: "primary",
+                    hint: "是否向MCP Server插件注册工具",
+                    "persistent-hint": ""
+                  }, null, 8, ["modelValue"])
+                ]),
+                _: 1
+              }),
+              _createVNode(_component_v_col, {
+                cols: "12",
+                md: "3"
               }, {
                 default: _withCtx(() => [
                   _createVNode(_component_v_btn, {
@@ -214,11 +232,11 @@ return (_ctx, _cache) => {
                     loading: running.value,
                     block: ""
                   }, {
-                    default: _withCtx(() => _cache[7] || (_cache[7] = [
+                    default: _withCtx(() => _cache[8] || (_cache[8] = [
                       _createTextVNode(" 立即运行一次 ")
                     ])),
                     _: 1,
-                    __: [7]
+                    __: [8]
                   }, 8, ["loading"])
                 ]),
                 _: 1
@@ -232,7 +250,7 @@ return (_ctx, _cache) => {
                 default: _withCtx(() => [
                   _createVNode(_component_v_text_field, {
                     modelValue: config.cron,
-                    "onUpdate:modelValue": _cache[2] || (_cache[2] = $event => ((config.cron) = $event)),
+                    "onUpdate:modelValue": _cache[3] || (_cache[3] = $event => ((config.cron) = $event)),
                     label: "执行周期",
                     placeholder: "0 8 * * *",
                     hint: "Cron表达式，默认每天8点执行",
@@ -250,11 +268,11 @@ return (_ctx, _cache) => {
           }, {
             default: _withCtx(() => [
               _createVNode(_component_v_card_title, null, {
-                default: _withCtx(() => _cache[8] || (_cache[8] = [
+                default: _withCtx(() => _cache[9] || (_cache[9] = [
                   _createTextVNode("监控插件配置")
                 ])),
                 _: 1,
-                __: [8]
+                __: [9]
               }),
               _createVNode(_component_v_card_text, null, {
                 default: _withCtx(() => [
@@ -267,7 +285,7 @@ return (_ctx, _cache) => {
                         default: _withCtx(() => [
                           _createVNode(_component_v_select, {
                             modelValue: config.monitored_plugins,
-                            "onUpdate:modelValue": _cache[3] || (_cache[3] = $event => ((config.monitored_plugins) = $event)),
+                            "onUpdate:modelValue": _cache[4] || (_cache[4] = $event => ((config.monitored_plugins) = $event)),
                             items: availablePlugins.value,
                             label: "选择要监控的插件",
                             hint: "可选择多个插件进行监控",
@@ -287,7 +305,7 @@ return (_ctx, _cache) => {
                         default: _withCtx(() => [
                           _createVNode(_component_v_text_field, {
                             modelValue: config.download_increment,
-                            "onUpdate:modelValue": _cache[4] || (_cache[4] = $event => ((config.download_increment) = $event)),
+                            "onUpdate:modelValue": _cache[5] || (_cache[5] = $event => ((config.download_increment) = $event)),
                             modelModifiers: { number: true },
                             label: "下载增量",
                             type: "number",
@@ -317,11 +335,11 @@ return (_ctx, _cache) => {
                     loading: saving.value,
                     class: "mr-2"
                   }, {
-                    default: _withCtx(() => _cache[9] || (_cache[9] = [
+                    default: _withCtx(() => _cache[10] || (_cache[10] = [
                       _createTextVNode(" 保存配置 ")
                     ])),
                     _: 1,
-                    __: [9]
+                    __: [10]
                   }, 8, ["loading"]),
                   _createVNode(_component_v_btn, {
                     color: "secondary",
@@ -330,11 +348,11 @@ return (_ctx, _cache) => {
                     loading: loading.value,
                     class: "mr-2"
                   }, {
-                    default: _withCtx(() => _cache[10] || (_cache[10] = [
+                    default: _withCtx(() => _cache[11] || (_cache[11] = [
                       _createTextVNode(" 重新加载 ")
                     ])),
                     _: 1,
-                    __: [10]
+                    __: [11]
                   }, 8, ["loading"]),
                   _createVNode(_component_v_btn, {
                     color: "info",
@@ -343,16 +361,16 @@ return (_ctx, _cache) => {
                   }, {
                     default: _withCtx(() => [
                       _createVNode(_component_v_icon, { start: "" }, {
-                        default: _withCtx(() => _cache[11] || (_cache[11] = [
+                        default: _withCtx(() => _cache[12] || (_cache[12] = [
                           _createTextVNode("mdi-chart-timeline-variant")
                         ])),
                         _: 1,
-                        __: [11]
+                        __: [12]
                       }),
-                      _cache[12] || (_cache[12] = _createTextVNode(" 查看热力图 "))
+                      _cache[13] || (_cache[13] = _createTextVNode(" 查看热力图 "))
                     ]),
                     _: 1,
-                    __: [12]
+                    __: [13]
                   })
                 ]),
                 _: 1
@@ -365,7 +383,7 @@ return (_ctx, _cache) => {
       }),
       _createVNode(_component_v_snackbar, {
         modelValue: snackbar.show,
-        "onUpdate:modelValue": _cache[5] || (_cache[5] = $event => ((snackbar.show) = $event)),
+        "onUpdate:modelValue": _cache[6] || (_cache[6] = $event => ((snackbar.show) = $event)),
         color: snackbar.color,
         timeout: 3000
       }, {

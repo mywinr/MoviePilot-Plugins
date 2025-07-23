@@ -16,14 +16,44 @@ from app.schemas.types import EventType
 from app.core.event import eventmanager, Event
 from app.log import logger
 
+# 导入MCP插件助手
+try:
+    from app.plugins.mcpserver.dev.mcp_dev import (
+        mcp_tool,
+        mcp_prompt,
+        MCPDecoratorMixin
+    )
+    MCP_DEV_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"MCPServer插件不可用，MCP功能将被禁用。错误详情: {str(e)}")
+    MCP_DEV_AVAILABLE = False
 
-class PluginHeatMonitor(_PluginBase):
+    # 定义空的装饰器，避免语法错误
+    def mcp_tool(*args, **kwargs):
+        """空的MCP工具装饰器，当MCP不可用时使用"""
+        def decorator(func):
+            return func
+        return decorator
+
+    def mcp_prompt(*args, **kwargs):
+        """空的MCP提示装饰器，当MCP不可用时使用"""
+        def decorator(func):
+            return func
+        return decorator
+
+    # 定义空的Mixin类
+    class MCPDecoratorMixin:
+        """空的MCP装饰器混入类，当MCP不可用时使用"""
+        pass
+
+
+class PluginHeatMonitor(_PluginBase, MCPDecoratorMixin):
     """插件热度监控"""
 
     plugin_name = "插件热度监控"
     plugin_desc = "监控已安装的下载量热度，支持日历热力图可视化"
     plugin_icon = "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/heatmonitor.png"
-    plugin_version = "1.5"
+    plugin_version = "1.6"
     plugin_author = "DzAvril"
     author_url = "https://github.com/DzAvril"
     plugin_config_prefix = "pluginheatmonitor_"
@@ -43,6 +73,7 @@ class PluginHeatMonitor(_PluginBase):
     _enable_notification = True  # 是否启用通知
     _download_increment = DEFAULT_INCREMENT
     _run_once = False  # 立即运行一次
+    _enable_mcp = True  # 是否启用MCP工具
 
     # 缓存
     _plugin_cache = None
@@ -51,6 +82,9 @@ class PluginHeatMonitor(_PluginBase):
     
     def init_plugin(self, config: dict = None):
         """初始化插件"""
+        # 注销MCP功能
+        self.stop_service()
+
         if not config:
             return
 
@@ -64,6 +98,16 @@ class PluginHeatMonitor(_PluginBase):
         # 启动或停止服务
         self._setup_service()
 
+        # 初始化MCP功能
+        if self._enable_mcp and MCP_DEV_AVAILABLE:
+            try:
+                logger.info("初始化插件热度监控MCP功能")
+                self.init_mcp_decorators()
+            except Exception as e:
+                logger.error(f"MCP初始化失败: {str(e)}")
+        elif not self._enable_mcp:
+            logger.info("MCP功能已禁用")
+
     def _load_basic_config(self, config: dict):
         """加载基础配置"""
         self._enabled = config.get("enabled", False)
@@ -72,6 +116,7 @@ class PluginHeatMonitor(_PluginBase):
         self._enable_notification = config.get("enable_notification", True)
         self._run_once = config.get("run_once", False)
         self._download_increment = config.get("download_increment", self.DEFAULT_INCREMENT)
+        self._enable_mcp = config.get("enable_mcp", True)
 
     def _update_monitored_plugins(self, config: dict):
         """更新监控插件配置"""
@@ -796,7 +841,7 @@ class PluginHeatMonitor(_PluginBase):
 
     def get_api(self) -> List[Dict[str, Any]]:
         """注册插件API"""
-        return [
+        api_endpoints = [
             {
                 "path": "/config",
                 "endpoint": self._get_config,
@@ -890,6 +935,21 @@ class PluginHeatMonitor(_PluginBase):
             },
         ]
 
+        # 添加 MCP API 端点（仅在启用时）
+        if self._enable_mcp:
+            try:
+                if hasattr(self, 'get_mcp_api_endpoints'):
+                    mcp_endpoints = self.get_mcp_api_endpoints()
+                    if mcp_endpoints:
+                        api_endpoints.extend(mcp_endpoints)
+                        logger.debug(f"添加了 {len(mcp_endpoints)} 个 MCP API 端点")
+            except Exception as e:
+                logger.error(f"获取 MCP API 端点失败: {str(e)}")
+        else:
+            logger.debug("MCP功能已禁用，跳过MCP API端点注册")
+
+        return api_endpoints
+
     # --- Vue Integration Methods ---
     @staticmethod
     def get_render_mode() -> Tuple[str, Optional[str]]:
@@ -911,6 +971,7 @@ class PluginHeatMonitor(_PluginBase):
         return {
             "enabled": self._enabled,
             "enable_notification": self._enable_notification,
+            "enable_mcp": self._enable_mcp,
             "cron": self._cron,
             "download_increment": download_increment,
             "monitored_plugins": list(self._monitored_plugins.keys()) if self._monitored_plugins else []
@@ -1849,3 +1910,194 @@ class PluginHeatMonitor(_PluginBase):
                 "message": f"获取月份数据失败: {str(e)}",
                 "dayData": {}
             }
+
+    # ==================== MCP工具 ====================
+
+    @mcp_tool(
+        name="get-plugin-download-stats",
+        description="获取插件热度监控的下载量统计信息",
+        parameters=[
+            {
+                "name": "plugin_id",
+                "description": "插件ID，如果不指定则返回所有监控插件的统计信息",
+                "required": False,
+                "type": "string"
+            },
+            {
+                "name": "include_details",
+                "description": "是否包含详细信息（如每日下载量、活跃天数等）",
+                "required": False,
+                "type": "boolean"
+            }
+        ]
+    )
+    def get_plugin_download_stats_tool(self, plugin_id: str = None, include_details: bool = True) -> dict:
+        """获取插件下载量统计信息的MCP工具"""
+        try:
+            if not self._enabled:
+                return {
+                    "status": "disabled",
+                    "message": "插件热度监控未启用"
+                }
+
+            if not self._enable_mcp:
+                return {
+                    "status": "disabled",
+                    "message": "MCP工具功能未启用"
+                }
+
+            if not self._monitored_plugins:
+                return {
+                    "status": "empty",
+                    "message": "暂无监控插件",
+                    "total_plugins": 0,
+                    "plugins": []
+                }
+
+            # 获取当前下载统计
+            plugin_helper = PluginHelper()
+            current_stats = plugin_helper.get_statistic()
+
+            if not current_stats:
+                return {
+                    "status": "error",
+                    "message": "无法获取插件统计数据"
+                }
+
+            result = {
+                "status": "success",
+                "timestamp": datetime.now().isoformat(),
+                "total_plugins": len(self._monitored_plugins),
+                "plugins": []
+            }
+
+            # 如果指定了特定插件ID
+            if plugin_id:
+                if plugin_id not in self._monitored_plugins:
+                    return {
+                        "status": "error",
+                        "message": f"插件 {plugin_id} 未在监控列表中"
+                    }
+
+                plugin_stats = self._get_single_plugin_stats(plugin_id, current_stats, include_details)
+                result["plugins"] = [plugin_stats]
+                result["total_plugins"] = 1
+            else:
+                # 获取所有监控插件的统计信息
+                total_downloads = 0
+                total_today_growth = 0
+
+                for monitored_plugin_id in self._monitored_plugins.keys():
+                    plugin_stats = self._get_single_plugin_stats(monitored_plugin_id, current_stats, include_details)
+                    result["plugins"].append(plugin_stats)
+                    total_downloads += plugin_stats.get("current_downloads", 0)
+                    total_today_growth += plugin_stats.get("today_growth", 0)
+
+                result["summary"] = {
+                    "total_downloads": total_downloads,
+                    "total_today_growth": total_today_growth
+                }
+
+            return result
+
+        except Exception as e:
+            logger.error(f"获取插件下载统计失败: {str(e)}", exc_info=True)
+            return {
+                "status": "error",
+                "message": f"获取统计信息失败: {str(e)}"
+            }
+
+    def _get_single_plugin_stats(self, plugin_id: str, current_stats: dict, include_details: bool) -> dict:
+        """获取单个插件的统计信息"""
+        try:
+            # 获取插件基本信息
+            plugin_name, _ = self._get_plugin_info(plugin_id)
+            current_downloads = current_stats.get(plugin_id, 0)
+
+            # 获取历史数据
+            history_key = f"history_{plugin_id}"
+            history_data = self.get_data(history_key) or {}
+            daily_downloads = history_data.get("daily_downloads", {})
+
+            # 基本统计信息
+            stats = {
+                "plugin_id": plugin_id,
+                "plugin_name": plugin_name,
+                "current_downloads": current_downloads
+            }
+
+            if include_details:
+                # 计算详细统计信息
+                today = datetime.now().strftime("%Y-%m-%d")
+
+                # 今日增长量
+                today_growth = 0
+                if today in daily_downloads:
+                    today_data = daily_downloads[today]
+                    if not self._is_historical_data(today_data):
+                        today_growth = self._get_day_value(today_data)
+
+                # 活跃天数（有下载量增长的天数）
+                active_days = 0
+                consecutive_active_days = 0
+                last_date = None
+
+                # 按日期排序
+                sorted_dates = sorted(daily_downloads.keys(), reverse=True)
+
+                for date in sorted_dates:
+                    day_data = daily_downloads[date]
+                    if not self._is_historical_data(day_data) and self._get_day_value(day_data) > 0:
+                        active_days += 1
+
+                        # 计算连续活跃天数
+                        if last_date is None:
+                            consecutive_active_days = 1
+                            last_date = datetime.strptime(date, "%Y-%m-%d")
+                        else:
+                            current_date = datetime.strptime(date, "%Y-%m-%d")
+                            if (last_date - current_date).days == 1:
+                                consecutive_active_days += 1
+                                last_date = current_date
+                            else:
+                                break
+                    elif last_date is not None:
+                        break
+
+                # 监控期间总增长量
+                monitoring_increments = self._calculate_historical_total(daily_downloads)
+
+                # 最后检查时间
+                last_check_time = history_data.get("last_check_time")
+                last_check_formatted = None
+                if last_check_time:
+                    last_check_formatted = datetime.fromtimestamp(last_check_time).strftime("%Y-%m-%d %H:%M:%S")
+
+                stats.update({
+                    "today_growth": today_growth,
+                    "active_days": active_days,
+                    "consecutive_active_days": consecutive_active_days,
+                    "monitoring_increments": monitoring_increments,
+                    "monitoring_days": len(daily_downloads),
+                    "last_check_time": last_check_formatted
+                })
+
+            return stats
+
+        except Exception as e:
+            logger.error(f"获取插件 {plugin_id} 统计信息失败: {str(e)}")
+            return {
+                "plugin_id": plugin_id,
+                "plugin_name": plugin_id,
+                "current_downloads": 0,
+                "error": str(e)
+            }
+
+    def stop_service(self):
+        """停止插件服务"""
+        try:
+            if hasattr(self, 'stop_mcp_decorators'):
+                # 停止MCP功能
+                self.stop_mcp_decorators()
+        except Exception as e:
+            logger.error(f"停止MCP服务失败: {str(e)}")
