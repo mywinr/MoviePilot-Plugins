@@ -433,9 +433,18 @@ async function loadAllPluginHeatmaps() {
         );
 
       const results = await Promise.all(heatmapPromises);
-      pluginHeatmaps.value = results
+      let pluginHeatmapsData = results
         .filter(result => result && result.status === 'success')
         .map(result => result);
+      
+      // 按照今日新增数量排序（降序）
+      pluginHeatmapsData.sort((a, b) => {
+        const todayA = getTodayContribution(a);
+        const todayB = getTodayContribution(b);
+        return todayB - todayA
+      });
+      
+      pluginHeatmaps.value = pluginHeatmapsData;
     }
   } catch (error) {
     console.error('加载插件热力图数据失败:', error);
@@ -849,7 +858,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const GitHubHeatmap = /*#__PURE__*/_export_sfc(_sfc_main$1, [['__scopeId',"data-v-3ee011bb"]]);
+const GitHubHeatmap = /*#__PURE__*/_export_sfc(_sfc_main$1, [['__scopeId',"data-v-4f942a9b"]]);
 
 const {createTextVNode:_createTextVNode,resolveComponent:_resolveComponent,withCtx:_withCtx,createVNode:_createVNode,createElementVNode:_createElementVNode,openBlock:_openBlock,createElementBlock:_createElementBlock,createCommentVNode:_createCommentVNode,toDisplayString:_toDisplayString,createBlock:_createBlock} = await importShared('vue');
 
