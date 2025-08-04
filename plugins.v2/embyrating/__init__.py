@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Tuple, Any
 from xml.dom import minidom
 import platform
 import threading
+import json
 
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -66,7 +67,7 @@ class EmbyRating(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/emby_rating.png"
     # 插件版本
-    plugin_version = "1.4"
+    plugin_version = "1.5"
     # 插件作者
     plugin_author = "DzAvril"
     # 作者主页
@@ -80,10 +81,8 @@ class EmbyRating(_PluginBase):
     # 支持的媒体文件扩展名
     MEDIA_EXTENSIONS = {'.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.strm'}
 
-
-
     # 私有属性
-    _enabled = False
+    senabled = False
     _cron = None
     _notify = False
     _onlyonce = False
@@ -96,6 +95,9 @@ class EmbyRating(_PluginBase):
     _douban_cookie = ""  # 豆瓣cookie配置
     _file_monitor_enabled = False  # 是否启用文件监控
 
+    # 历史记录文件路径
+    _history_file = None
+
     # 定时器
     _scheduler: Optional[BackgroundScheduler] = None
 
@@ -106,6 +108,9 @@ class EmbyRating(_PluginBase):
 
     # 评分缓存 {media_key: {"rating": float, "last_update": timestamp}}
     _rating_cache: Dict[str, Dict] = {}
+
+    # 豆瓣助手
+    _douban_helper = None
 
     # 处理结果收集器，用于批量通知
     _processing_results: List[Dict] = []
@@ -149,6 +154,10 @@ class EmbyRating(_PluginBase):
 
     def init_plugin(self, config: dict = None):
         """初始化插件"""
+        # 初始化历史记录文件路径
+        if self._history_file is None:
+            self._history_file = Path(self.get_data_path()) / "rating_history.json"
+
         # 停止现有任务
         self.stop_service()
 
@@ -160,9 +169,10 @@ class EmbyRating(_PluginBase):
             self._rating_source = config.get("rating_source", "tmdb")
             self._update_interval = config.get("update_interval", 7)
             self._auto_scrape = config.get("auto_scrape", True)
-            # 缓存功能默认开启，不再从配置读取
-            self._cache_enabled = True
             self._media_dirs = config.get("media_dirs", "")
+            # 清除缓存的媒体目录解析结果
+            if hasattr(self, '_parsed_media_dirs'):
+                delattr(self, '_parsed_media_dirs')
             self._refresh_library = config.get("refresh_library", True)
             self._douban_cookie = config.get("douban_cookie", "")
             self._file_monitor_enabled = config.get("file_monitor_enabled", False)
@@ -171,43 +181,198 @@ class EmbyRating(_PluginBase):
         # 加载缓存数据
         self._load_cache_data()
 
-        # 初始化处理结果收集器
-        self._processing_results = []
-        self._failed_results = []
-        self._skipped_results = []
 
+        # 如果插件启用，启动相关服务
         if self._enabled:
             # 启动定时任务
-            self._scheduler = BackgroundScheduler(timezone=settings.TZ)
-
-            if self._onlyonce:
-                logger.info(f"立即运行一次评分更新")
-                self._scheduler.add_job(
-                    func=self.update_all_ratings,
-                    trigger="date",
-                    run_date=datetime.now(tz=pytz.timezone(
-                        settings.TZ)) + timedelta(seconds=3),
-                    name="立即更新评分",
-                )
-                self._onlyonce = False
-                self._update_config()
+            if self._cron:
+                try:
+                    self._scheduler = BackgroundScheduler(timezone=settings.TZ)
+                    self._scheduler.add_job(
+                        func=self.update_all_ratings,
+                        trigger=CronTrigger.from_crontab(self._cron),
+                        id="emby_rating_update",
+                        name="Emby评分更新"
+                    )
+                    self._scheduler.start()
+                    logger.info(f"Emby评分更新定时任务已启动，执行周期：{self._cron}")
+                except Exception as e:
+                    logger.error(f"启动定时任务失败：{str(e)}")
 
             # 启动文件监控
-            if self._file_monitor_enabled:
+            if self._file_monitor_enabled and self._rating_source == "douban":
                 self._start_file_monitor()
 
-            if self._cron:
-                logger.info(f"启动定时任务：{self._cron}")
-                self._scheduler.add_job(
-                    func=self.update_all_ratings,
-                    trigger=CronTrigger.from_crontab(self._cron),
-                    name="定时更新评分",
-                )
+            # 如果是一次性运行
+            if self._onlyonce:
+                logger.info("开始执行一次性评分更新任务...")
+                self.update_all_ratings()
 
-            # 启动任务
-            if self._scheduler.get_jobs():
-                self._scheduler.print_jobs()
-                self._scheduler.start()
+        logger.info("Emby评分管理插件初始化完成")
+
+    def _save_history_record(self, record: Dict):
+        """保存历史记录"""
+        try:
+            # 获取现有历史记录
+            history_data = self._load_history_records()
+            
+            # 添加新记录
+            history_data.append(record)
+            
+            # 保持最多1000条记录
+            if len(history_data) > 1000:
+                history_data = history_data[-1000:]
+            
+            # 保存到文件
+            with open(self._history_file, 'w', encoding='utf-8') as f:
+                json.dump(history_data, f, ensure_ascii=False, indent=2)
+                
+        except Exception as e:
+            logger.error(f"保存历史记录失败: {str(e)}")
+
+    def _load_history_records(self) -> List[Dict]:
+        """加载历史记录"""
+        try:
+            if self._history_file.exists():
+                with open(self._history_file, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
+                    if not content:
+                        # 文件为空，返回空列表
+                        return []
+                    return json.loads(content)
+            return []
+        except json.JSONDecodeError as e:
+            logger.error(f"历史记录JSON格式错误: {str(e)}")
+            # 备份损坏的文件
+            try:
+                backup_file = self._history_file.with_suffix('.json.backup')
+                self._history_file.rename(backup_file)
+                logger.info(f"已备份损坏的历史记录文件到: {backup_file}")
+            except Exception as backup_e:
+                logger.error(f"备份损坏文件失败: {str(backup_e)}")
+
+            # 创建新的空文件
+            try:
+                with open(self._history_file, 'w', encoding='utf-8') as f:
+                    json.dump([], f, ensure_ascii=False, indent=2)
+                logger.info("已创建新的空历史记录文件")
+            except Exception as create_e:
+                logger.error(f"创建新历史记录文件失败: {str(create_e)}")
+
+            return []
+        except Exception as e:
+            logger.error(f"加载历史记录失败: {str(e)}")
+            return []
+
+    def _add_success_record(self, title: str, rating: float, source: str, media_type: str, file_path: str = None):
+        """添加成功记录"""
+        # 确保媒体类型是字符串格式
+        media_type_str = str(media_type) if media_type else "UNKNOWN"
+        # 移除可能的枚举前缀，只保留基本类型
+        if "." in media_type_str:
+            media_type_str = media_type_str.split(".")[-1].upper()
+        elif media_type_str.upper() in ["MOVIE", "TV"]:
+            media_type_str = media_type_str.upper()
+        elif media_type_str in ["电影", "电视剧", "未知"]:
+            # 处理中文媒体类型值，转换为英文
+            media_type_mapping = {
+                "电影": "MOVIE",
+                "电视剧": "TV",
+                "未知": "UNKNOWN"
+            }
+            media_type_str = media_type_mapping[media_type_str]
+        else:
+            media_type_str = "UNKNOWN"
+
+        # 获取目录别名
+        directory_alias = self._get_directory_alias(file_path) if file_path else None
+
+        record = {
+            "title": title,
+            "rating": rating,
+            "rating_source": source,
+            "media_type": media_type_str,
+            "status": "success",
+            "timestamp": datetime.now().isoformat(),
+            "description": f"评分更新成功: {rating} ({source})",
+            "directory_alias": directory_alias
+        }
+        self._save_history_record(record)
+
+    def _add_failed_record(self, title: str, reason: str, media_type: str, file_path: str = None):
+        """添加失败记录"""
+        # 确保媒体类型是字符串格式
+        media_type_str = str(media_type) if media_type else "UNKNOWN"
+        # 移除可能的枚举前缀，只保留基本类型
+        if "." in media_type_str:
+            media_type_str = media_type_str.split(".")[-1].upper()
+        elif media_type_str.upper() in ["MOVIE", "TV"]:
+            media_type_str = media_type_str.upper()
+        elif media_type_str in ["电影", "电视剧", "未知"]:
+            # 处理中文媒体类型值，转换为英文
+            media_type_mapping = {
+                "电影": "MOVIE",
+                "电视剧": "TV",
+                "未知": "UNKNOWN"
+            }
+            media_type_str = media_type_mapping[media_type_str]
+        else:
+            media_type_str = "UNKNOWN"
+
+        # 获取目录别名
+        directory_alias = self._get_directory_alias(file_path) if file_path else None
+
+        record = {
+            "title": title,
+            "rating": None,
+            "rating_source": self._rating_source,
+            "media_type": media_type_str,
+            "status": "error",
+            "timestamp": datetime.now().isoformat(),
+            "description": f"评分更新失败: {reason}",
+            "error_message": reason,
+            "directory_alias": directory_alias
+        }
+        self._save_history_record(record)
+
+    def _add_skipped_record(self, title: str, reason: str, media_type: str):
+        """添加跳过记录（不再保存到历史记录文件）"""
+        # 跳过记录不再保存到历史记录中，只用于统计和通知
+        logger.debug(f"跳过记录（不保存到历史）: {title} - {reason}")
+        pass
+
+    def _get_directory_alias(self, file_path: str) -> str:
+        """根据文件路径获取目录别名"""
+        if not file_path or not self._media_dirs:
+            return None
+
+        try:
+            # 缓存解析结果以提高效率
+            if not hasattr(self, '_parsed_media_dirs'):
+                self._parsed_media_dirs = []
+                for dir_config in self._media_dirs.split("\n"):
+                    dir_config = dir_config.strip()
+                    if not dir_config or "#" not in dir_config:
+                        continue
+
+                    parts = dir_config.split("#")
+                    if len(parts) >= 3:
+                        config_path = parts[0].strip()
+                        alias = parts[2].strip()
+                        if config_path and alias:
+                            self._parsed_media_dirs.append((config_path, alias))
+
+            # 快速匹配
+            file_path = str(file_path)
+            for config_path, alias in self._parsed_media_dirs:
+                if file_path.startswith(config_path):
+                    return alias
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"获取目录别名失败: {str(e)}")
+            return None
 
 
     def get_state(self) -> bool:
@@ -560,6 +725,115 @@ class EmbyRating(_PluginBase):
 
         except Exception as e:
             logger.debug(f"检查跳过逻辑时出错: {str(e)}")
+            return False
+
+    def get_existing_douban_rating(self, nfo_path: Path) -> Optional[float]:
+        """从NFO文件中获取已存在的豆瓣评分"""
+        try:
+            # 读取NFO文件
+            try:
+                with open(nfo_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+            except UnicodeDecodeError:
+                try:
+                    with open(nfo_path, 'r', encoding='gbk') as f:
+                        content = f.read()
+                except UnicodeDecodeError:
+                    return None
+
+            # 解析XML
+            try:
+                root = ET.fromstring(content)
+            except ET.ParseError:
+                return None
+
+            # 查找EmbyRating标签
+            emby_rating_elem = root.find("EmbyRating")
+            if emby_rating_elem is None:
+                return None
+
+            # 获取豆瓣评分
+            douban_elem = emby_rating_elem.find("douban")
+            if douban_elem is None or not douban_elem.text:
+                return None
+
+            # 检查评分是否有效
+            try:
+                rating = float(douban_elem.text)
+                if rating > 0:  # 评分应该大于0
+                    return rating
+            except ValueError:
+                return None
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"获取NFO中已存在的豆瓣评分时出错: {str(e)}")
+            return None
+
+    def is_existing_douban_rating_valid(self, nfo_path: Path) -> bool:
+        """检查NFO中已存在的豆瓣评分是否有效且未过期"""
+        try:
+            # 读取NFO文件
+            try:
+                with open(nfo_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+            except UnicodeDecodeError:
+                try:
+                    with open(nfo_path, 'r', encoding='gbk') as f:
+                        content = f.read()
+                except UnicodeDecodeError:
+                    return False
+
+            # 解析XML
+            try:
+                root = ET.fromstring(content)
+            except ET.ParseError:
+                return False
+
+            # 查找EmbyRating标签
+            emby_rating_elem = root.find("EmbyRating")
+            if emby_rating_elem is None:
+                return False
+
+            # 检查是否存在豆瓣评分
+            douban_elem = emby_rating_elem.find("douban")
+            if douban_elem is None or not douban_elem.text:
+                return False
+
+            # 检查评分是否有效
+            try:
+                rating = float(douban_elem.text)
+                if rating <= 0:  # 评分应该大于0
+                    return False
+            except ValueError:
+                return False
+
+            # 检查更新时间
+            update_elem = emby_rating_elem.find("update")
+            if update_elem is None or not update_elem.text:
+                return False
+
+            try:
+                last_update = datetime.strptime(update_elem.text, "%Y-%m-%d")
+                days_since_update = (datetime.now() - last_update).days
+
+                # 检查是否在更新间隔内
+                if days_since_update < self._update_interval:
+                    logger.debug(
+                        f"NFO中已存在的豆瓣评分未过期: "
+                        f"距离上次更新{days_since_update}天 "
+                        f"(间隔设置: {self._update_interval}天)"
+                    )
+                    return True
+            except ValueError:
+                # 如果日期格式不正确，认为评分无效
+                return False
+
+            return False
+
+        except Exception as e:
+            logger.debug(f"检查NFO中已存在的豆瓣评分有效性时出错: {str(e)}")
             return False
 
     def update_nfo_rating(self, nfo_path: Path, new_rating: float,
@@ -998,6 +1272,24 @@ class EmbyRating(_PluginBase):
             logger.error(f"发送批量通知失败：{str(e)}")
 
         finally:
+            # 保存处理结果到历史记录（不保存跳过的记录）
+            for result in self._processing_results:
+                self._add_success_record(
+                    result['title'],
+                    result['rating'],
+                    result['source'],
+                    result['media_type'],
+                    result.get('file_path')
+                )
+
+            for result in self._failed_results:
+                self._add_failed_record(
+                    result['title'],
+                    result['reason'],
+                    result['media_type'],
+                    result.get('file_path')
+                )
+
             # 清空处理结果列表
             self._processing_results.clear()
             self._failed_results.clear()
@@ -1054,30 +1346,294 @@ class EmbyRating(_PluginBase):
             self._update_config()
             self.update_all_ratings()
 
+    def get_history_endpoint(self, limit: int = 20, offset: int = 0) -> Dict[str, Any]:
+        """
+        API端点：获取历史记录，支持分页参数
+        """
+        try:
+            return self.get_history_api(limit, offset)
+        except Exception as e:
+            logger.error(f"获取历史记录端点失败: {str(e)}")
+            return {"success": False, "message": str(e)}
+
+    def clear_history_endpoint(self) -> Dict[str, Any]:
+        """
+        API端点：清除历史记录
+        """
+        try:
+            return self.clear_history_api()
+        except Exception as e:
+            logger.error(f"清除历史记录端点失败: {str(e)}")
+            return {"success": False, "message": str(e)}
+
     def get_api(self) -> List[Dict[str, Any]]:
         """注册插件API"""
         return [
             {
-                "path": "/monitor_status",
-                "endpoint": self.get_monitor_status_api,
+                "path": "/history",
+                "endpoint": self.get_history_endpoint,
                 "methods": ["GET"],
-                "summary": "获取文件监控状态",
-                "description": "返回当前文件监控线程和observer的状态信息"
+                "auth": "bear",
+                "summary": "获取评分更新历史记录",
+                "description": "返回评分更新的历史记录，支持分页参数(limit, offset)"
+            },
+            {
+                "path": "/history",
+                "endpoint": self.clear_history_endpoint,
+                "methods": ["DELETE"],
+                "auth": "bear",
+                "summary": "清除评分更新历史记录",
+                "description": "删除所有评分更新历史记录"
+            },
+            {
+                "path": "/config",
+                "endpoint": self.get_config_api,
+                "methods": ["GET"],
+                "auth": "bear",
+                "summary": "获取插件配置",
+                "description": "返回当前插件配置信息"
+            },
+            {
+                "path": "/config",
+                "endpoint": self.set_config_api,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "设置插件配置",
+                "description": "保存插件配置信息"
+            },
+            {
+                "path": "/run",
+                "endpoint": self.run_now_api,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "立即运行评分更新",
+                "description": "立即执行一次评分更新任务"
+            },
+            {
+                "path": "/monitor_dirs",
+                "endpoint": self.get_monitor_dirs_api,
+                "methods": ["GET"],
+                "auth": "bear",
+                "summary": "获取监控目录",
+                "description": "返回当前监控的目录列表"
             }
         ]
 
-    def get_monitor_status_api(self):
-        """获取监控状态API"""
+
+
+    def get_monitor_dirs_api(self):
+        """获取监控目录API"""
         try:
-            status = self.get_monitor_status()
+            monitor_dirs = []
+            if self._media_dirs:
+                for dir_config in self._media_dirs.split("\n"):
+                    dir_config = dir_config.strip()
+                    if not dir_config:
+                        continue
+                    if "#" in dir_config:
+                        path_part, server_part = dir_config.split("#", 1)
+                        monitor_path = path_part.strip()
+                        server_name = server_part.strip()
+                    else:
+                        monitor_path = dir_config.strip()
+                        server_name = "未指定"
+
+                    monitor_dirs.append({
+                        "path": monitor_path,
+                        "server": server_name,
+                        "exists": Path(monitor_path).exists()
+                    })
+
             return {
                 "success": True,
-                "data": status
+                "data": monitor_dirs
+            }
+        except Exception as e:
+            logger.error(f"获取监控目录失败: {str(e)}")
+            return {
+                "success": False,
+                "message": f"获取监控目录失败: {str(e)}"
+            }
+
+    def get_history_api(self, limit: int = 20, offset: int = 0) -> Dict[str, Any]:
+        """
+        获取历史记录API端点，支持分页参数
+
+        Args:
+            limit: 每页记录数，默认20，最大100
+            offset: 偏移量，默认0
+
+        Returns:
+            包含历史记录数据和分页信息的字典
+        """
+        try:
+            # 确保参数是整数类型
+            try:
+                limit = int(limit) if limit is not None else 20
+                offset = int(offset) if offset is not None else 0
+            except (ValueError, TypeError) as e:
+                logger.warning(f"参数转换失败: {e}, 使用默认值")
+                limit = 20
+                offset = 0
+
+            # 限制参数范围，防止性能问题
+            limit = min(max(limit, 10), 100)  # 最小10条，最大100条
+            offset = max(offset, 0)  # offset不能为负数
+
+            # 加载历史记录
+            all_history = self._load_history_records()
+
+            # 反向排序（最新的在前面）
+            all_history.reverse()
+
+            # 计算总数和分页信息
+            total = len(all_history)
+
+            # 分页数据
+            history_data = all_history[offset:offset + limit]
+
+            # 计算是否还有更多记录
+            has_more = (offset + len(history_data)) < total
+
+            return {
+                "success": True,
+                "data": history_data,
+                "pagination": {
+                    "total": total,
+                    "offset": offset,
+                    "limit": limit,
+                    "has_more": has_more,
+                    "current_count": len(history_data)
+                }
+            }
+        except Exception as e:
+            logger.error(f"获取历史记录失败: {str(e)}")
+            return {
+                "success": False,
+                "message": f"获取历史记录失败: {str(e)}"
+            }
+
+    def clear_history_api(self) -> Dict[str, Any]:
+        """清除历史记录API端点"""
+        try:
+            # 创建空的JSON数组并写入文件
+            with open(self._history_file, 'w', encoding='utf-8') as f:
+                json.dump([], f, ensure_ascii=False, indent=2)
+
+            logger.info("历史记录已清除")
+
+            return {
+                "success": True,
+                "message": "历史记录已清除"
+            }
+        except Exception as e:
+            logger.error(f"清除历史记录失败: {str(e)}")
+            return {
+                "success": False,
+                "message": f"清除历史记录失败: {str(e)}"
+            }
+
+    def get_config_api(self):
+        """获取配置API"""
+        try:
+            config_data = {
+                "enabled": self._enabled,
+                "cron": self._cron,
+                "notify": self._notify,
+                "onlyonce": self._onlyonce,
+                "rating_source": self._rating_source,
+                "update_interval": self._update_interval,
+                "auto_scrape": self._auto_scrape,
+                "media_dirs": self._media_dirs,
+                "refresh_library": self._refresh_library,
+                "douban_cookie": self._douban_cookie,
+                "file_monitor_enabled": self._file_monitor_enabled
+            }
+            
+            return {
+                "success": True,
+                "data": config_data
             }
         except Exception as e:
             return {
                 "success": False,
-                "message": f"获取监控状态失败: {str(e)}"
+                "message": f"获取配置失败: {str(e)}"
+            }
+
+    def set_config_api(self, config_data: dict):
+        """设置配置API"""
+        try:
+            # 更新配置
+            if "enabled" in config_data:
+                self._enabled = config_data["enabled"]
+            if "cron" in config_data:
+                self._cron = config_data["cron"]
+            if "notify" in config_data:
+                self._notify = config_data["notify"]
+            if "onlyonce" in config_data:
+                self._onlyonce = config_data["onlyonce"]
+            if "rating_source" in config_data:
+                self._rating_source = config_data["rating_source"]
+            if "update_interval" in config_data:
+                self._update_interval = config_data["update_interval"]
+            if "auto_scrape" in config_data:
+                self._auto_scrape = config_data["auto_scrape"]
+            if "media_dirs" in config_data:
+                self._media_dirs = config_data["media_dirs"]
+            if "refresh_library" in config_data:
+                self._refresh_library = config_data["refresh_library"]
+            if "douban_cookie" in config_data:
+                self._douban_cookie = config_data["douban_cookie"]
+            if "file_monitor_enabled" in config_data:
+                self._file_monitor_enabled = config_data["file_monitor_enabled"]
+            
+            # 更新豆瓣助手
+            self._douban_helper = DoubanHelper(user_cookie=self._douban_cookie)
+            
+            # 保存配置
+            self._update_config()
+            
+            # 重新初始化插件
+            self.init_plugin({
+                "enabled": self._enabled,
+                "cron": self._cron,
+                "notify": self._notify,
+                "onlyonce": self._onlyonce,
+                "rating_source": self._rating_source,
+                "update_interval": self._update_interval,
+                "auto_scrape": self._auto_scrape,
+                "media_dirs": self._media_dirs,
+                "refresh_library": self._refresh_library,
+                "douban_cookie": self._douban_cookie,
+                "file_monitor_enabled": self._file_monitor_enabled
+            })
+            
+            return {
+                "success": True,
+                "message": "配置保存成功"
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"保存配置失败: {str(e)}"
+            }
+
+    def run_now_api(self):
+        """立即运行API"""
+        try:
+            # 启动一个新线程来执行评分更新，避免阻塞API响应
+            import threading
+            thread = threading.Thread(target=self.update_all_ratings)
+            thread.start()
+            
+            return {
+                "success": True,
+                "message": "评分更新任务已启动"
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"启动任务失败: {str(e)}"
             }
 
     def switch_rating_source(self, source: str):
@@ -1091,290 +1647,42 @@ class EmbyRating(_PluginBase):
 
         return {"success": True, "message": f"已切换到{source}评分"}
 
-    def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
-        """拼装插件配置页面"""
-        return [
-            {
-                'component': 'VForm',
-                'content': [
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VAlert',
-                                        'props': {
-                                            'type': 'info',
-                                            'variant': 'tonal',
-                                            'text': ('📖 插件工作机制说明：\n'
-                                                   '• 插件通过修改NFO文件中的rating字段来更新媒体评分\n'
-                                                   '• 对于电影：直接更新电影NFO文件的评分信息\n'
-                                                   '• 对于电视剧：整体评分（tvshow.nfo）使用第一季的评分\n'
-                                                   '• 支持豆瓣评分和TMDB评分之间的智能切换\n'
-                                                   '• 文件监控：实时监控新创建的NFO文件并自动更新评分（仅在评分源为豆瓣时生效）')
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 6
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'enabled',
-                                            'label': '启用插件',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 6
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'notify',
-                                            'label': '发送通知',
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 6
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSelect',
-                                        'props': {
-                                            'model': 'rating_source',
-                                            'label': '评分源',
-                                            'items': [
-                                                {'title': 'TMDB评分',
-                                                 'value': 'tmdb'},
-                                                {'title': '豆瓣评分',
-                                                 'value': 'douban'}
-                                            ]
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 6
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'update_interval',
-                                            'label': '豆瓣评分更新间隔（天）',
-                                            'type': 'number',
-                                            'min': 1,
-                                            'max': 365
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 6
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'auto_scrape',
-                                            'label': '自动刮削',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 6
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'file_monitor_enabled',
-                                            'label': '启用文件监控',
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 6
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'refresh_library',
-                                            'label': '更新后刷新媒体库',
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextarea',
-                                        'props': {
-                                            'model': 'media_dirs',
-                                            'label': '媒体目录（多个用换行分隔）',
-                                            'rows': 3,
-                                            'placeholder': ('例如：\n'
-                                                          '/sata/影视/电影#Emby\n'
-                                                          '/sata/影视/电视剧#Emby\n'
-                                                          '格式：媒体库根目录#媒体服务器名称')
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextarea',
-                                        'props': {
-                                            'model': 'douban_cookie',
-                                            'label': '豆瓣Cookie',
-                                            'rows': 3,
-                                            'placeholder': '留空则从CookieCloud获取，格式：bid=xxx; ck=xxx; dbcl2=xxx; ...'
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 6
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VCronField',
-                                        'props': {
-                                            'model': 'cron',
-                                            'label': '定时任务',
-                                            'placeholder': '0 2 * * *'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 6
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'onlyonce',
-                                            'label': '立即全量运行一次',
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    }
-                ]
-            }
-        ], {
-            "enabled": False,
-            "cron": "0 2 * * *",
-            "notify": False,
-            "onlyonce": False,
-            "rating_source": "tmdb",
-            "update_interval": 7,
-            "auto_scrape": True,
-
-            "media_dirs": "",
-            "refresh_library": True,
-            "douban_cookie": "",
-            "file_monitor_enabled": False
+    def get_form(self) -> Tuple[Optional[List[dict]], Dict[str, Any]]:
+        """返回Vue组件配置"""
+        return None, {
+            "enabled": self._enabled,
+            "cron": self._cron,
+            "notify": self._notify,
+            "onlyonce": self._onlyonce,
+            "rating_source": self._rating_source,
+            "update_interval": self._update_interval,
+            "auto_scrape": self._auto_scrape,
+            "media_dirs": self._media_dirs,
+            "refresh_library": self._refresh_library,
+            "douban_cookie": self._douban_cookie,
+            "file_monitor_enabled": self._file_monitor_enabled
         }
 
-    def get_page(self) -> List[dict]:
-        """拼装插件详情页面"""
+    def get_page(self) -> Optional[List[dict]]:
+        """Vue模式不使用Vuetify页面定义"""
         return None
+
+    @staticmethod
+    def get_render_mode() -> Tuple[str, Optional[str]]:
+        """获取插件渲染模式"""
+        return "vue", "dist/assets"
 
     def stop_service(self):
         """停止插件"""
         # 设置停止标志，中断正在运行的任务
         self._should_stop = True
         logger.info(f"设置停止标志，正在中断运行中的任务...")
+
+        # 停止文件监控
+        try:
+            self._stop_file_monitor()
+        except Exception as e:
+            logger.error(f"停止文件监控失败：{str(e)}")
 
         # 停止监控线程
         try:
@@ -1390,12 +1698,7 @@ class EmbyRating(_PluginBase):
                 self._scheduler = None
         except Exception as e:
             logger.error(f"停止定时任务失败：{str(e)}")
-
-        # 停止文件监控
-        try:
-            self._stop_file_monitor()
-        except Exception as e:
-            logger.error(f"停止文件监控失败：{str(e)}")
+            
         self._should_stop = False
 
     def _stop_monitor_thread(self):
@@ -1415,6 +1718,10 @@ class EmbyRating(_PluginBase):
                     logger.warning("监控线程在5秒内未能停止")
                 else:
                     logger.info("监控线程已成功停止")
+            # 检查线程是否存在但未启动的情况
+            elif self._monitor_thread and not self._monitor_thread.is_alive():
+                # 线程存在但未启动或已结束，直接清理
+                logger.debug("监控线程已存在但未启动或已结束，直接清理")
 
             # 清理线程对象
             self._monitor_thread = None
@@ -1423,21 +1730,7 @@ class EmbyRating(_PluginBase):
         except Exception as e:
             logger.error(f"停止监控线程时出错: {str(e)}")
 
-    def get_monitor_status(self) -> dict:
-        """获取监控状态"""
-        return {
-            "monitor_thread_alive": self._monitor_thread.is_alive() if self._monitor_thread else False,
-            "monitor_thread_name": self._monitor_thread.name if self._monitor_thread else None,
-            "observers_count": len(self._file_observers),
-            "observers_status": [
-                {
-                    "index": i,
-                    "alive": obs.is_alive(),
-                    "class": obs.__class__.__name__
-                }
-                for i, obs in enumerate(self._file_observers)
-            ]
-        }
+
 
     def process_media_directory(self, media_dir: Path):
         """处理媒体目录"""
@@ -1875,22 +2168,22 @@ class EmbyRating(_PluginBase):
                         'media_type': media_type.value
                     })
                 else:
-                    # 根据媒体类型获取评分
-                    if media_type == MediaType.TV:
-                        # 电视剧：获取第一季的评分作为整个剧集的评分
-                        douban_rating = self._get_first_season_rating(title, year)
-                        if not douban_rating:
-                            logger.warning(f"无法获取剧集评分: {title}")
-                            # 添加到失败结果
-                            self._failed_results.append({
-                                'title': f"{title} (电视剧)",
-                                'reason': '无法获取剧集评分',
-                                'media_type': 'TV'
-                            })
-                            return
-                    else:
-                        # 电影：直接获取豆瓣评分
-                        douban_rating = self.get_douban_rating(title, year)
+                    # 检查NFO中是否已存在有效的豆瓣评分
+                    douban_rating = None
+                    if self.is_existing_douban_rating_valid(nfo_path):
+                        douban_rating = self.get_existing_douban_rating(nfo_path)
+                        if douban_rating:
+                            logger.info(f"使用NFO中已存在的豆瓣评分: {title} = {douban_rating}")
+                    
+                    # 如果NFO中没有有效的豆瓣评分，则从网络获取
+                    if not douban_rating:
+                        # 根据媒体类型获取评分
+                        if media_type == MediaType.TV:
+                            # 电视剧：获取第一季的评分作为整个剧集的评分
+                            douban_rating = self._get_first_season_rating(title, year)
+                        else:
+                            # 电影：直接获取豆瓣评分
+                            douban_rating = self.get_douban_rating(title, year)
 
                     if douban_rating:
                         # 更新NFO文件（跳过内部的跳过检查，因为已经检查过了）
@@ -1900,7 +2193,8 @@ class EmbyRating(_PluginBase):
                                 'title': title,
                                 'rating': douban_rating,
                                 'source': 'douban',
-                                'media_type': media_type.value
+                                'media_type': media_type.value,
+                                'file_path': str(nfo_path)
                             })
                     else:
                         logger.warning(f"无法获取豆瓣评分: {title}")
@@ -1908,7 +2202,8 @@ class EmbyRating(_PluginBase):
                         self._failed_results.append({
                             'title': title,
                             'reason': '无法获取豆瓣评分',
-                            'media_type': media_type.value
+                            'media_type': media_type.value,
+                            'file_path': str(nfo_path)
                         })
 
             elif self._rating_source == "tmdb":
@@ -1924,7 +2219,8 @@ class EmbyRating(_PluginBase):
                                 'title': title,
                                 'rating': '无评分',
                                 'source': 'tmdb',
-                                'media_type': media_type.value
+                                'media_type': media_type.value,
+                                'file_path': str(nfo_path)
                             })
                         else:
                             # 成功恢复评分
@@ -1932,14 +2228,16 @@ class EmbyRating(_PluginBase):
                                 'title': title,
                                 'rating': restored_rating,
                                 'source': 'tmdb',
-                                'media_type': media_type.value
+                                'media_type': media_type.value,
+                                'file_path': str(nfo_path)
                             })
                     else:
                         # 添加到失败结果
                         self._failed_results.append({
                             'title': title,
                             'reason': '无法恢复TMDB评分',
-                            'media_type': media_type.value
+                            'media_type': media_type.value,
+                            'file_path': str(nfo_path)
                         })
                 else:
                     logger.warning(f"未找到TMDB评分备份: {title}")
@@ -1947,7 +2245,8 @@ class EmbyRating(_PluginBase):
                     self._failed_results.append({
                         'title': title,
                         'reason': '未找到TMDB评分备份',
-                        'media_type': media_type.value
+                        'media_type': media_type.value,
+                        'file_path': str(nfo_path)
                     })
         except Exception as e:
             logger.error(f"处理NFO文件失败 {nfo_path}: {str(e)}")
@@ -1955,7 +2254,8 @@ class EmbyRating(_PluginBase):
             self._failed_results.append({
                 'title': title if 'title' in locals() else str(nfo_path.stem),
                 'reason': f'处理异常: {str(e)}',
-                'media_type': 'UNKNOWN'
+                'media_type': 'UNKNOWN',
+                'file_path': str(nfo_path)
             })
             import traceback
             logger.debug(f"详细错误信息: {traceback.format_exc()}")
@@ -2188,7 +2488,7 @@ class EmbyRating(_PluginBase):
             # 为每个目录启动监控
             for dir_config in media_dirs:
                 # 检查是否收到停止信号
-                if self._monitor_stop_event.is_set():
+                if self._monitor_stop_event and self._monitor_stop_event.is_set():
                     logger.info("收到停止信号，中断文件监控启动")
                     break
 
@@ -2228,7 +2528,7 @@ class EmbyRating(_PluginBase):
                     observer.start()
 
                     # 简单验证observer是否成功启动
-                    if observer.is_alive():
+                    if hasattr(observer, 'is_alive') and observer.is_alive():
                         logger.info(f"{mon_path} 的文件监控服务启动成功")
                     else:
                         logger.warning(f"{mon_path} 的文件监控服务启动后状态异常")
@@ -2240,6 +2540,9 @@ class EmbyRating(_PluginBase):
                         try:
                             self._file_observers.remove(observer)
                             observer.stop()
+                            # 只有在observer已启动的情况下才调用join
+                            if hasattr(observer, 'is_alive') and observer.is_alive():
+                                observer.join()
                         except:
                             pass
 
@@ -2258,7 +2561,9 @@ class EmbyRating(_PluginBase):
             for observer in self._file_observers:
                 try:
                     observer.stop()
-                    observer.join()
+                    # 只有在observer已启动的情况下才调用join
+                    if hasattr(observer, 'is_alive') and observer.is_alive():
+                        observer.join()
                 except Exception as e:
                     print(str(e))
                     logger.error(f"停止目录监控失败：{str(e)}")
@@ -2404,6 +2709,32 @@ class EmbyRating(_PluginBase):
         except Exception as e:
             logger.error(f"发送文件监控通知失败: {str(e)}")
         finally:
+            # 保存处理结果到历史记录（不保存跳过的记录）
+            for result in self._processing_results:
+                self._add_success_record(
+                    result['title'],
+                    result['rating'],
+                    result['source'],
+                    result['media_type'],
+                    result.get('file_path')
+                )
+
+            for result in self._failed_results:
+                self._add_failed_record(
+                    result['title'],
+                    result['reason'],
+                    result['media_type'],
+                    result.get('file_path')
+                )
+
+            # 跳过的记录不再保存到历史记录中
+            # for result in self._skipped_results:
+            #     self._add_skipped_record(
+            #         result['title'],
+            #         result['reason'],
+            #         result['media_type']
+            #     )
+
             # 清空结果列表
             self._processing_results.clear()
             self._failed_results.clear()
