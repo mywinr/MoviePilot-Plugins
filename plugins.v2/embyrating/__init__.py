@@ -67,7 +67,7 @@ class EmbyRating(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/DzAvril/MoviePilot-Plugins/main/icons/emby_rating.png"
     # 插件版本
-    plugin_version = "1.5"
+    plugin_version = "1.6"
     # 插件作者
     plugin_author = "DzAvril"
     # 作者主页
@@ -264,7 +264,7 @@ class EmbyRating(_PluginBase):
             logger.error(f"加载历史记录失败: {str(e)}")
             return []
 
-    def _add_success_record(self, title: str, rating: float, source: str, media_type: str, file_path: str = None):
+    def _add_success_record(self, title: str, rating: float, source: str, media_type: str, file_path: str = None, directory_alias: str = None):
         """添加成功记录"""
         # 确保媒体类型是字符串格式
         media_type_str = str(media_type) if media_type else "UNKNOWN"
@@ -284,8 +284,9 @@ class EmbyRating(_PluginBase):
         else:
             media_type_str = "UNKNOWN"
 
-        # 获取目录别名
-        directory_alias = self._get_directory_alias(file_path) if file_path else None
+        # 获取目录别名（优先使用传入的别名，否则通过路径匹配）
+        if directory_alias is None:
+            directory_alias = self._get_directory_alias(file_path) if file_path else None
 
         record = {
             "title": title,
@@ -299,7 +300,7 @@ class EmbyRating(_PluginBase):
         }
         self._save_history_record(record)
 
-    def _add_failed_record(self, title: str, reason: str, media_type: str, file_path: str = None):
+    def _add_failed_record(self, title: str, reason: str, media_type: str, file_path: str = None, directory_alias: str = None):
         """添加失败记录"""
         # 确保媒体类型是字符串格式
         media_type_str = str(media_type) if media_type else "UNKNOWN"
@@ -319,8 +320,9 @@ class EmbyRating(_PluginBase):
         else:
             media_type_str = "UNKNOWN"
 
-        # 获取目录别名
-        directory_alias = self._get_directory_alias(file_path) if file_path else None
+        # 获取目录别名（优先使用传入的别名，否则通过路径匹配）
+        if directory_alias is None:
+            directory_alias = self._get_directory_alias(file_path) if file_path else None
 
         record = {
             "title": title,
@@ -1073,30 +1075,36 @@ class EmbyRating(_PluginBase):
         self._failed_results = []
         self._skipped_results = []
 
-        # 获取媒体目录列表
+        # 获取媒体目录列表和对应的别名
         media_dirs = []
         if self._media_dirs:
             for dir_config in self._media_dirs.split("\n"):
                 dir_config = dir_config.strip()
                 if not dir_config:  # 跳过空行
                     continue
+
+                alias = None
                 if "#" in dir_config:
-                    # 解析路径和媒体服务器名称
-                    path_part, _ = dir_config.split("#", 1)
-                    media_dir = Path(path_part.strip())
+                    # 解析路径、媒体服务器名称和别名
+                    parts = dir_config.split("#")
+                    path_part = parts[0].strip()
+                    # 如果有第三个参数，那就是别名
+                    if len(parts) >= 3:
+                        alias = parts[2].strip() or None
+                    media_dir = Path(path_part)
                 else:
                     # 没有指定媒体服务器，只使用路径
                     media_dir = Path(dir_config.strip())
 
                 if media_dir:
-                    media_dirs.append(media_dir)
+                    media_dirs.append((media_dir, alias))
 
         if not media_dirs:
             logger.warning(f"未配置媒体目录")
             return
 
         # 处理每个媒体目录
-        for media_dir in media_dirs:
+        for media_dir, alias in media_dirs:
             if self._should_stop:
                 logger.info(f"检测到停止信号，中断评分更新任务")
                 break
@@ -1105,8 +1113,8 @@ class EmbyRating(_PluginBase):
                 logger.warning(f"媒体目录不存在: {media_dir}")
                 continue
 
-            logger.info(f"处理媒体目录: {media_dir}")
-            self.process_media_directory(media_dir)
+            logger.info(f"处理媒体目录: {media_dir} (别名: {alias or '无'})")
+            self.process_media_directory(media_dir, alias)
 
         # 发送批量通知
         self._send_batch_notification()
@@ -1279,7 +1287,8 @@ class EmbyRating(_PluginBase):
                     result['rating'],
                     result['source'],
                     result['media_type'],
-                    result.get('file_path')
+                    result.get('file_path'),
+                    result.get('directory_alias')
                 )
 
             for result in self._failed_results:
@@ -1287,7 +1296,8 @@ class EmbyRating(_PluginBase):
                     result['title'],
                     result['reason'],
                     result['media_type'],
-                    result.get('file_path')
+                    result.get('file_path'),
+                    result.get('directory_alias')
                 )
 
             # 清空处理结果列表
@@ -1732,7 +1742,7 @@ class EmbyRating(_PluginBase):
 
 
 
-    def process_media_directory(self, media_dir: Path):
+    def process_media_directory(self, media_dir: Path, directory_alias: str = None):
         """处理媒体目录"""
         try:
             # 检查目录是否存在
@@ -1771,7 +1781,7 @@ class EmbyRating(_PluginBase):
                         if show_root and show_root not in processed_shows:
                             logger.info(f"开始处理电视剧: {show_root}")
                             processed_shows.add(show_root)
-                            self._process_tv_show(show_root)
+                            self._process_tv_show(show_root, directory_alias)
                         elif show_root in processed_shows:
                             logger.debug(f"电视剧已处理，跳过: {show_root}")
                     else:
@@ -1791,7 +1801,7 @@ class EmbyRating(_PluginBase):
                                 )
                                 continue
                         # 处理NFO文件
-                        self.process_nfo_file(nfo_path, MediaType.MOVIE)
+                        self.process_nfo_file(nfo_path, MediaType.MOVIE, directory_alias)
 
             # 输出统计信息
             logger.info(f"目录统计 - 总文件: {total_files}, 媒体文件: {media_files}, NFO文件: {nfo_files}")
@@ -1832,7 +1842,7 @@ class EmbyRating(_PluginBase):
         except Exception:
             return None
 
-    def _process_tv_show(self, show_root: Path):
+    def _process_tv_show(self, show_root: Path, directory_alias: str = None):
         """处理电视剧，更新tvshow.nfo文件评分"""
         try:
             tvshow_nfo = show_root / "tvshow.nfo"
@@ -1857,7 +1867,7 @@ class EmbyRating(_PluginBase):
                     return
 
             logger.info(f"使用统一方法处理电视剧NFO: {tvshow_nfo}")
-            self.process_nfo_file(tvshow_nfo, MediaType.TV)
+            self.process_nfo_file(tvshow_nfo, MediaType.TV, directory_alias)
 
 
 
@@ -1988,7 +1998,7 @@ class EmbyRating(_PluginBase):
             logger.debug(f"未找到任何 {tag_name} 元素")
             return None
 
-    def process_nfo_file(self, nfo_path: Path, media_type: MediaType = MediaType.UNKNOWN):
+    def process_nfo_file(self, nfo_path: Path, media_type: MediaType = MediaType.UNKNOWN, directory_alias: str = None):
         """处理单个NFO文件，兼容命名空间"""
         try:
             # 检查是否需要停止
@@ -2194,7 +2204,8 @@ class EmbyRating(_PluginBase):
                                 'rating': douban_rating,
                                 'source': 'douban',
                                 'media_type': media_type.value,
-                                'file_path': str(nfo_path)
+                                'file_path': str(nfo_path),
+                                'directory_alias': directory_alias
                             })
                     else:
                         logger.warning(f"无法获取豆瓣评分: {title}")
@@ -2203,7 +2214,8 @@ class EmbyRating(_PluginBase):
                             'title': title,
                             'reason': '无法获取豆瓣评分',
                             'media_type': media_type.value,
-                            'file_path': str(nfo_path)
+                            'file_path': str(nfo_path),
+                            'directory_alias': directory_alias
                         })
 
             elif self._rating_source == "tmdb":
@@ -2220,7 +2232,8 @@ class EmbyRating(_PluginBase):
                                 'rating': '无评分',
                                 'source': 'tmdb',
                                 'media_type': media_type.value,
-                                'file_path': str(nfo_path)
+                                'file_path': str(nfo_path),
+                                'directory_alias': directory_alias
                             })
                         else:
                             # 成功恢复评分
@@ -2229,7 +2242,8 @@ class EmbyRating(_PluginBase):
                                 'rating': restored_rating,
                                 'source': 'tmdb',
                                 'media_type': media_type.value,
-                                'file_path': str(nfo_path)
+                                'file_path': str(nfo_path),
+                                'directory_alias': directory_alias
                             })
                     else:
                         # 添加到失败结果
@@ -2237,7 +2251,8 @@ class EmbyRating(_PluginBase):
                             'title': title,
                             'reason': '无法恢复TMDB评分',
                             'media_type': media_type.value,
-                            'file_path': str(nfo_path)
+                            'file_path': str(nfo_path),
+                            'directory_alias': directory_alias
                         })
                 else:
                     logger.warning(f"未找到TMDB评分备份: {title}")
@@ -2246,7 +2261,8 @@ class EmbyRating(_PluginBase):
                         'title': title,
                         'reason': '未找到TMDB评分备份',
                         'media_type': media_type.value,
-                        'file_path': str(nfo_path)
+                        'file_path': str(nfo_path),
+                        'directory_alias': directory_alias
                     })
         except Exception as e:
             logger.error(f"处理NFO文件失败 {nfo_path}: {str(e)}")
@@ -2255,7 +2271,8 @@ class EmbyRating(_PluginBase):
                 'title': title if 'title' in locals() else str(nfo_path.stem),
                 'reason': f'处理异常: {str(e)}',
                 'media_type': 'UNKNOWN',
-                'file_path': str(nfo_path)
+                'file_path': str(nfo_path),
+                'directory_alias': directory_alias
             })
             import traceback
             logger.debug(f"详细错误信息: {traceback.format_exc()}")
@@ -2716,7 +2733,8 @@ class EmbyRating(_PluginBase):
                     result['rating'],
                     result['source'],
                     result['media_type'],
-                    result.get('file_path')
+                    result.get('file_path'),
+                    result.get('directory_alias')
                 )
 
             for result in self._failed_results:
@@ -2724,7 +2742,8 @@ class EmbyRating(_PluginBase):
                     result['title'],
                     result['reason'],
                     result['media_type'],
-                    result.get('file_path')
+                    result.get('file_path'),
+                    result.get('directory_alias')
                 )
 
             # 跳过的记录不再保存到历史记录中

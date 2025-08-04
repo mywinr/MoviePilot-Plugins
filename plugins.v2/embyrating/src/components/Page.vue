@@ -284,7 +284,7 @@
                   </v-avatar>
                   <div class="d-flex align-center gap-2">
                     <v-card-title class="text-h5 pa-0 timeline-title">
-                      评分更新记录
+                      评分记录
                     </v-card-title>
                     <v-chip
                       color="primary"

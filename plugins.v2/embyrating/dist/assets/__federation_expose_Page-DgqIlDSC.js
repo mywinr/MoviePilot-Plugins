@@ -1357,7 +1357,7 @@ return (_ctx, _cache) => {
                                     _createElementVNode("div", _hoisted_13, [
                                       _createVNode(_component_v_card_title, { class: "text-h5 pa-0 timeline-title" }, {
                                         default: _withCtx(() => _cache[19] || (_cache[19] = [
-                                          _createTextVNode(" 评分更新记录 ", -1)
+                                          _createTextVNode(" 评分记录 ", -1)
                                         ])),
                                         _: 1,
                                         __: [19]
@@ -1759,6 +1759,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-f52c8c2a"]]);
+const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-985b04bf"]]);
 
 export { Page as default };
