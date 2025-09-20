@@ -1366,10 +1366,29 @@ class RemoveLink(_PluginBase):
             if strm_path_str.startswith(strm_prefix):
                 # 计算相对路径
                 relative_path = strm_path_str[len(strm_prefix) :].lstrip("/")
-                # 构建网盘路径，去掉 .strm 后缀
-                storage_file_path = storage_prefix.rstrip("/") + "/" + relative_path
-                if storage_file_path.endswith(".strm"):
-                    storage_file_path = storage_file_path[:-5]  # 去掉 .strm 后缀
+                # ----- START OF FINAL MODIFICATION -----
+                # 1. 先去掉 .strm 后缀，得到基础相对路径
+                if relative_path.endswith(".strm"):
+                    relative_path = relative_path[:-5]
+                
+                # 2. 智能截取核心文件名，去除 .10T 及之后的所有内容
+                #    这能同时处理 .10T, .10T2 等所有情况
+                base_name = Path(relative_path).name
+                search_prefix = base_name.split('.10T')[0]
+                
+                # 3. 用截取后的核心文件名重新构建最终的网盘搜索路径
+                #    注意：这里我们只保留了父目录，并拼接上干净的前缀
+                parent_dir = str(Path(relative_path).parent)
+                # 处理根目录的特殊情况
+                if parent_dir == '.':
+                    storage_search_path = storage_prefix.rstrip("/") + "/" + search_prefix
+                else:
+                    storage_search_path = storage_prefix.rstrip("/") + "/" + parent_dir + "/" + search_prefix
+                
+                logger.info(f"智能生成的最终网盘搜索路径: {storage_search_path}")
+
+                return storage_type, storage_search_path
+                # ----- END OF FINAL MODIFICATION -----
 
                 return storage_type, storage_file_path
 
@@ -1402,15 +1421,10 @@ class RemoveLink(_PluginBase):
             logger.debug(f"父目录为空: [{storage_type}] {parent_path}")
             return None
 
-# ----- START OF MODIFICATION -----
-        # 智能生成用于匹配的前缀，无论.10T后面是否有其他字符
+# 查找以 base_path 为前缀的视频文件
         base_name = Path(base_path).name
-        search_prefix = base_name.split('.10T')[0]
-        logger.info(f"使用智能截取的前缀进行搜索: '{search_prefix}'")
-
-        # 使用新的前缀查找视频文件
         for file_item in files:
-            if file_item.type == "file" and file_item.name.startswith(search_prefix):
+            if file_item.type == "file" and file_item.name.startswith(base_name):
                 # 检查是否为视频文件
                 if (
                     file_item.extension
@@ -1420,7 +1434,6 @@ class RemoveLink(_PluginBase):
                         f"找到匹配的视频文件: [{storage_type}] {file_item.path}"
                     )
                     return file_item
-# ----- END OF MODIFICATION ----
 
         logger.debug(f"未找到匹配的视频文件: [{storage_type}] {base_path}")
         return None
