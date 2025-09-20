@@ -1410,10 +1410,17 @@ class RemoveLink(_PluginBase):
             type="dir",
         )
 
-        # 检查父目录是否存在
+# ----- START OF MODIFICATION -----
+        # 检查父目录是否存在，并添加明确的日志记录
+        logger.info(f"正在检查网盘父目录是否存在: [{storage_type}] {parent_path}")
         if not self._storagechain.exists(parent_item):
-            logger.debug(f"父目录不存在: [{storage_type}] {parent_path}")
+            # 将日志级别从 DEBUG 提升到 WARNING，使其更显眼
+            logger.warning(f"检查失败：网盘父目录不存在或无法访问: [{storage_type}] {parent_path}")
             return None
+        else:
+            # 添加成功日志，确认此步骤已通过
+            logger.info(f"检查成功：已在网盘中找到父目录。")
+        # ----- END OF MODIFICATION -----
 
         # 列出父目录中的文件
         files = self._storagechain.list_files(parent_item, recursion=False)
