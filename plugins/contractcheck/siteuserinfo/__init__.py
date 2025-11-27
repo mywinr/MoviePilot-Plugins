@@ -66,7 +66,7 @@ class ISiteUserInfo(metaclass=ABCMeta):
         # 站点官组
         self.official_team = {
             "观众": ["Audies", "ADE", "ADWeb", "ADAudio", "ADeBook", "ADMusic"],
-            "UBits": ["UBits","UBTV","UBWEB"],
+            "UBits": ["UBits", "UBTV", "UBWEB"],
             "听听歌": ["TTG", "WiKi", "DoA", "NGB", "ARiN"],
             "馒头": ["MTeam", "MTeamTV"],
             "朋友": ["FRDS"],
