@@ -49,11 +49,12 @@
         "name": "契约检查",
         "description": "定时检查保种契约达成情况。",
         "labels": "做种",
-        "version": "1.5",
+        "version": "1.5.1",
         "icon": "contract.png",
         "author": "DzAvril",
         "level": 1,
         "history": {
+            "v1.5.1": "修正Ubits官种统计错误的问题",
             "v1.5": "增加zm官组",
             "v1.4": "支持仪表板组件显示",
             "v1.3": "修复观众做种数据异常问题",
