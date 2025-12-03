@@ -303,6 +303,7 @@ class RemoveLink(_PluginBase):
             self._monitor_strm_deletion = config.get("monitor_strm_deletion", False)
             self.strm_path_mappings = config.get("strm_path_mappings") or ""
             # 验证延迟时间范围
+            self.strm_split_markers = config.get("strm_split_markers") or "
             delay_seconds = config.get("delay_seconds", 30)
             self._delay_seconds = (
                 max(10, min(300, int(delay_seconds))) if delay_seconds else 30
@@ -780,6 +781,29 @@ class RemoveLink(_PluginBase):
                             }
                         ],
                     },
+                    # ----- START OF NEW CONFIGURATION ITEM -----
+                 # 自定义STRM文件名分隔符配置
+                 {
+                     "component": "VRow",
+                     "content": [
+                         {
+                             "component": "VCol",
+                             "props": {"cols": 12},
+                             "content": [
+                                 {
+                                     "component": "VTextarea",
+                                     "props": {
+                                         "model": "strm_split_markers",
+                                         "label": "STRM文件名特殊标记（用于截断）",
+                                         "rows": 3,
+                                         "placeholder": "每行一个特殊标记，插件会按此截取文件名核心部分。\n例如：\n.10T\n.q1",
+                                     },
+                                 }
+                             ],
+                         }
+                     ],
+                 },
+                 # ----- END OF NEW CONFIGURATION ITEM -----
                     # STRM配置说明
                     {
                         "component": "VRow",
@@ -869,6 +893,7 @@ class RemoveLink(_PluginBase):
             "exclude_keywords": "",
             "monitor_strm_deletion": False,
             "strm_path_mappings": "",
+            "strm_split_markers": ".10T\n.q1", # 添加默认值
         }
 
     def get_page(self) -> List[dict]:
@@ -1354,26 +1379,56 @@ class RemoveLink(_PluginBase):
 
         return mappings
 
-    def _get_storage_path_from_strm(self, strm_file_path: Path) -> Tuple[str, str]:
-        """
-        根据 strm 文件路径获取对应的网盘存储路径
-        返回 (storage_type, storage_path) 或 (None, None)
-        """
-        mappings = self._parse_strm_path_mappings()
-        strm_path_str = str(strm_file_path)
+def _get_storage_path_from_strm(self, strm_file_path: Path) -> Tuple[str, str]:
+     """
+     根据 strm 文件路径获取对应的网盘存储路径 (V3 - 可配置分隔符版)
+     返回 (storage_type, storage_path) 或 (None, None)
+     """
+     mappings = self._parse_strm_path_mappings()
+     strm_path_str = str(strm_file_path)
 
-        for strm_prefix, (storage_type, storage_prefix) in mappings.items():
-            if strm_path_str.startswith(strm_prefix):
-                # 计算相对路径
-                relative_path = strm_path_str[len(strm_prefix) :].lstrip("/")
-                # 构建网盘路径，去掉 .strm 后缀
-                storage_file_path = storage_prefix.rstrip("/") + "/" + relative_path
-                if storage_file_path.endswith(".strm"):
-                    storage_file_path = storage_file_path[:-5]  # 去掉 .strm 后缀
+     for strm_prefix, (storage_type, storage_prefix) in mappings.items():
+         if strm_path_str.startswith(strm_prefix):
+             # ----- START OF FINAL & CONFIGURABLE MODIFICATION -----
+             from app.core.config import settings
 
-                return storage_type, storage_file_path
+             # 1. 计算相对路径并先去掉 .strm 后缀
+             relative_path = strm_path_str[len(strm_prefix) :].lstrip("/")
+             if relative_path.lower().endswith(".strm"):
+                 relative_path = relative_path[:-5]
+             
+             # 2. 智能截取核心文件名
+             base_name = Path(relative_path).name
+             clean_base_name = base_name
 
-        return None, None
+             # 读取用户配置的分隔符
+             split_markers = [marker.strip() for marker in self.strm_split_markers.split('\n') if marker.strip()]
+             
+             # 遍历分隔符列表，只要命中一个就进行截断并停止
+             for marker in split_markers:
+                 if marker in clean_base_name:
+                     # 按分隔符分割文件名，取第一部分
+                     clean_base_name = clean_base_name.split(marker)[0]
+                     logger.info(f"检测到特殊标记 '{marker}'，已截取文件名为: '{clean_base_name}'")
+                     break # 命中第一个就停止，避免过度截断
+             
+             # 3. 从截断后的结果中，再尝试移除视频后缀（以防万一）
+             final_stem = clean_base_name
+             for ext in settings.RMT_MEDIAEXT:
+                 if final_stem.lower().endswith(ext):
+                     final_stem = final_stem[:-len(ext)]
+                     break
+             
+             # 4. 构建最终的搜索路径
+             clean_relative_path = relative_path.replace(base_name, final_stem)
+             storage_search_path = storage_prefix.rstrip("/") + "/" + clean_relative_path
+             
+             logger.info(f"最终生成的网盘搜索路径: {storage_search_path}")
+
+             return storage_type, storage_search_path
+             # ----- END OF FINAL & CONFIGURABLE MODIFICATION -----
+
+     return None, None
 
     def _find_storage_media_file(
         self, storage_type: str, base_path: str
